@@ -29,7 +29,7 @@ impl CodeGenerator {
     pub fn declare_variables(name_table: &NameTable) {
         for ident in name_table.get_all_identifiers() {
             if ident.category == crate::models::Category::Var {
-                Self::add_instruction(&format!("{}  dw    1", ident.name));
+                Self::add_instruction(&format!("{}  dw    0", ident.name));
             }
         }
     }
@@ -40,40 +40,68 @@ impl CodeGenerator {
         Self::add_instruction("push dx");
         Self::add_instruction("push di");
         Self::add_instruction("cmp ax, 0");
-        Self::add_instruction("jne not_zero");
+        Self::add_instruction("jne print_one");
         Self::add_instruction("mov byte ptr [PRINT_BUF], '0'");
+        Self::add_instruction("mov byte ptr [PRINT_BUF+1], '$'");
+        Self::add_instruction("jmp print_output");
+        Self::add_instruction("print_one:");
+        Self::add_instruction("mov byte ptr [PRINT_BUF], '1'");
+        Self::add_instruction("mov byte ptr [PRINT_BUF+1], '$'");
+        Self::add_instruction("print_output:");
         Self::add_instruction("lea dx, PRINT_BUF");
         Self::add_instruction("mov ah, 09h");
         Self::add_instruction("int 21h");
-        Self::add_instruction("jmp print_newline");
-        Self::add_instruction("not_zero:");
-        Self::add_instruction("MOV   CX, 10");
-        Self::add_instruction("MOV   DI, BUFEND - PRINT_BUF");
-        Self::add_instruction("PRINT_LOOP:");
-        Self::add_instruction("MOV   DX, 0");
-        Self::add_instruction("DIV   CX");
-        Self::add_instruction("ADD   DL, '0'");
-        Self::add_instruction("MOV   [PRINT_BUF + DI - 1], DL");
-        Self::add_instruction("DEC   DI");
-        Self::add_instruction("CMP   AL, 0");
-        Self::add_instruction("JNE   PRINT_LOOP");
-        Self::add_instruction("LEA   DX, PRINT_BUF");
-        Self::add_instruction("ADD   DX, DI");
-        Self::add_instruction("MOV   AH, 09H");
-        Self::add_instruction("INT   21H");
-        Self::add_instruction("print_newline:");
+        Self::add_instruction("mov dl, 0Dh");
+        Self::add_instruction("mov ah, 02h");
+        Self::add_instruction("int 21h");
+        Self::add_instruction("mov dl, 0Ah");
+        Self::add_instruction("mov ah, 02h");
+        Self::add_instruction("int 21h");
+        Self::add_instruction("pop di");
+        Self::add_instruction("pop dx");
+        Self::add_instruction("pop cx");
+        Self::add_instruction("RET");
+        Self::add_instruction("PRINT ENDP");
+    
+        // Исправленная процедура PRINT_INT
+        Self::add_instruction("PRINT_INT PROC NEAR");
+        Self::add_instruction("push ax");
+        Self::add_instruction("push bx");
+        Self::add_instruction("push cx");
+        Self::add_instruction("push dx");
+        Self::add_instruction("push di");
+        Self::add_instruction("mov bx, 10");
+        Self::add_instruction("lea di, PRINT_BUF + 9");
+        Self::add_instruction("mov byte ptr [di], '$'");
+        Self::add_instruction("cmp ax, 0");
+        Self::add_instruction("jge convert_loop");
+        Self::add_instruction("mov byte ptr [di-1], '-'");
+        Self::add_instruction("dec di");
+        Self::add_instruction("neg ax");
+        Self::add_instruction("convert_loop:");
+        Self::add_instruction("xor dx, dx");
+        Self::add_instruction("div bx");
+        Self::add_instruction("add dl, '0'");
+        Self::add_instruction("dec di");
+        Self::add_instruction("mov [di], dl");
+        Self::add_instruction("cmp ax, 0");
+        Self::add_instruction("jne convert_loop");
+        Self::add_instruction("mov dx, di");
+        Self::add_instruction("mov ah, 09h");
+        Self::add_instruction("int 21h");
         Self::add_instruction("mov dl, 0Dh"); // CR
         Self::add_instruction("mov ah, 02h");
         Self::add_instruction("int 21h");
         Self::add_instruction("mov dl, 0Ah"); // LF
         Self::add_instruction("mov ah, 02h");
         Self::add_instruction("int 21h");
-        Self::add_instruction("print_end:");
         Self::add_instruction("pop di");
         Self::add_instruction("pop dx");
         Self::add_instruction("pop cx");
+        Self::add_instruction("pop bx");
+        Self::add_instruction("pop ax");
         Self::add_instruction("RET");
-        Self::add_instruction("PRINT ENDP");
+        Self::add_instruction("PRINT_INT ENDP");
     }
 
     pub fn new_label(prefix: &str) -> String {

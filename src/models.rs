@@ -13,8 +13,6 @@ pub enum Lexems {
     Begin,
     End,
     EOF,
-    Let,
-    Const,
     Error,
     Equal,
     NotEqual,
@@ -22,6 +20,10 @@ pub enum Lexems {
     GreaterOrEqual,
     Less,
     LessOrEqual,
+    Not,
+    And,
+    Or,
+    Xor,
     If,
     Then,
     ElseIf,
@@ -30,6 +32,12 @@ pub enum Lexems {
     While,
     EndWhile,
     Print,
+    Int,
+    Bool,
+    LParen,
+    RParen,
+    Comma,
+    Colon,
 }
 
 pub struct Keyword {
@@ -55,14 +63,5 @@ pub struct Identifier {
     pub name: String,
     pub category: Category,
     pub data_type: DataType,
-}
-
-impl Identifier {
-    pub fn new(name: String, category: Category, data_type: DataType) -> Self {
-        Identifier {
-            name,
-            category,
-            data_type,
-        }
-    }
+    pub value: Option<i32>,
 }
