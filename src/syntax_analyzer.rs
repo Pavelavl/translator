@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::code_generator::CodeGenerator;
 use crate::lexical_analyzer::LexicalAnalyzer;
 use crate::models::{Category, DataType, Lexems};
@@ -22,7 +24,7 @@ pub struct SyntaxAnalyzer {
 impl SyntaxAnalyzer {
     pub fn new(input_text: String) -> Self {
         let mut lexer = LexicalAnalyzer {
-            keywords: Vec::new(),
+            keywords: HashMap::new(),
             current_lexem: Lexems::None,
             current_name: String::new(),
             name_table: NameTable::new(),

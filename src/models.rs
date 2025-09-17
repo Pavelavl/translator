@@ -40,11 +40,6 @@ pub enum Lexems {
     Colon,
 }
 
-pub struct Keyword {
-    pub word: &'static str,
-    pub lex: Lexems,
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Category {
     Const,
