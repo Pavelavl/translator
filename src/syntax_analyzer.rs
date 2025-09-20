@@ -661,92 +661,6 @@ impl SyntaxAnalyzer {
         program
     }
 
-    pub fn parse_instruction_no_code(&mut self) {
-        println!("[SyntaxAnalyzer] Starting parse_instruction_no_code");
-        self.maybe_advance();
-        match self.lexer.current_lexem() {
-            Lexems::Print => {
-                println!("[SyntaxAnalyzer] Processing print instruction");
-                self.lexer.advance();
-                if self.lexer.current_lexem() == Lexems::Name
-                    || self.lexer.current_lexem() == Lexems::Number
-                {
-                    self.lexer.advance();
-                }
-                if self.lexer.current_lexem() == Lexems::Semi {
-                    self.lexer.advance();
-                }
-            }
-            Lexems::Name => {
-                let name = self.lexer.current_name().to_string();
-                println!("[SyntaxAnalyzer] Processing identifier: '{}'", name);
-                self.lexer.advance();
-                if self.lexer.current_lexem() == Lexems::Assign
-                    || self.lexer.current_lexem() == Lexems::Equal
-                {
-                    if let Some(ident) = self.name_table.find_by_name(&name) {
-                        if ident.category == Category::Const {
-                            self.report_error(format!("Cannot assign to constant '{}'", name));
-                            self.lexer.advance();
-                            self.skip_expression();
-                            if self.lexer.current_lexem() == Lexems::Semi {
-                                self.lexer.advance();
-                            }
-                            println!("[SyntaxAnalyzer] Aborted due to assignment to constant");
-                            return;
-                        }
-                    }
-                    self.lexer.advance();
-                    self.skip_expression();
-                    if self.lexer.current_lexem() == Lexems::Semi {
-                        self.lexer.advance();
-                    }
-                    if self.name_table.find_by_name(&name).is_none() {
-                        self.name_table
-                            .add_or_update(name, Category::Var, DataType::Int, None);
-                        // println!("[SyntaxAnalyzer] Added undeclared identifier '{}' to name table", name);
-                    }
-                } else {
-                    self.report_error(format!("Expected ':=' or '=' after identifier '{}'", name));
-                    println!("[SyntaxAnalyzer] Aborted due to missing assignment operator");
-                }
-            }
-            Lexems::Int | Lexems::Bool => {
-                println!("[SyntaxAnalyzer] Processing variable declaration");
-                self.parse_variable_declarations_no_code()
-            }
-            Lexems::If => {
-                println!("[SyntaxAnalyzer] Skipping if statement");
-                self.skip_if_no_code()
-            }
-            Lexems::While => {
-                println!("[SyntaxAnalyzer] Skipping while statement");
-                self.skip_while_no_code()
-            }
-            Lexems::Begin => {
-                println!("[SyntaxAnalyzer] Skipping block");
-                self.lexer.advance();
-                self.skip_block(&[Lexems::End]);
-                if self.lexer.current_lexem() == Lexems::End {
-                    self.lexer.advance();
-                }
-            }
-            Lexems::EOF => {
-                println!("[SyntaxAnalyzer] Reached EOF");
-            }
-            _ => {
-                self.report_error(format!(
-                    "Unexpected token in instruction: {:?} ('{}')",
-                    self.lexer.current_lexem(),
-                    self.lexer.current_name()
-                ));
-                self.lexer.advance();
-                println!("[SyntaxAnalyzer] Aborted due to unexpected token");
-            }
-        }
-        println!("[SyntaxAnalyzer] Completed parse_instruction_no_code");
-    }
-
     pub fn parse_variable_declarations_no_code(&mut self) {
         println!("[SyntaxAnalyzer] Starting parse_variable_declarations_no_code");
         let is_const = self.lexer.current_name().to_lowercase().ends_with("_const");
@@ -846,53 +760,6 @@ impl SyntaxAnalyzer {
         println!("[SyntaxAnalyzer] Completed skip_expression, current lexem: {:?}", self.lexer.current_lexem());
     }
 
-    pub fn skip_block(&mut self, end_tokens: &[Lexems]) {
-        println!("[SyntaxAnalyzer] Starting skip_block, end_tokens: {:?}", end_tokens);
-        while !end_tokens.contains(&self.lexer.current_lexem())
-            && self.lexer.current_lexem() != Lexems::EOF
-        {
-            self.parse_instruction_no_code();
-        }
-        println!("[SyntaxAnalyzer] Completed skip_block");
-    }
-
-    fn skip_if_no_code(&mut self) {
-        println!("[SyntaxAnalyzer] Starting skip_if_no_code");
-        self.lexer.advance();
-        self.skip_expression();
-        if self.lexer.current_lexem() == Lexems::Then {
-            self.lexer.advance();
-        }
-        self.skip_block(&[Lexems::ElseIf, Lexems::Else, Lexems::EndIf]);
-        while self.lexer.current_lexem() == Lexems::ElseIf {
-            self.lexer.advance();
-            self.skip_expression();
-            if self.lexer.current_lexem() == Lexems::Then {
-                self.lexer.advance();
-            }
-            self.skip_block(&[Lexems::ElseIf, Lexems::Else, Lexems::EndIf]);
-        }
-        if self.lexer.current_lexem() == Lexems::Else {
-            self.lexer.advance();
-            self.skip_block(&[Lexems::EndIf]);
-        }
-        if self.lexer.current_lexem() == Lexems::EndIf {
-            self.lexer.advance();
-        }
-        println!("[SyntaxAnalyzer] Completed skip_if_no_code");
-    }
-
-    fn skip_while_no_code(&mut self) {
-        println!("[SyntaxAnalyzer] Starting skip_while_no_code");
-        self.lexer.advance();
-        self.skip_expression();
-        self.skip_block(&[Lexems::EndWhile]);
-        if self.lexer.current_lexem() == Lexems::EndWhile {
-            self.lexer.advance();
-        }
-        println!("[SyntaxAnalyzer] Completed skip_while_no_code");
-    }
-
     fn parse_block(&mut self) -> Statement {
         println!("[SyntaxAnalyzer] Starting parse_block");
         self.lexer.advance();
@@ -961,13 +828,5 @@ impl SyntaxAnalyzer {
         let stmt = Statement::While { cond, body };
         println!("[SyntaxAnalyzer] Completed parse_while: {:?}", stmt);
         stmt
-    }
-
-    pub fn skip_to_end(&mut self) {
-        println!("[SyntaxAnalyzer] Starting skip_to_end");
-        while self.lexer.current_lexem() != Lexems::EOF {
-            self.lexer.advance();
-        }
-        println!("[SyntaxAnalyzer] Completed skip_to_end");
     }
 }
