@@ -1,6 +1,7 @@
-use eframe::egui;
-use std::path::PathBuf;
+use eframe::egui::{self};
+use std::{fs, path::PathBuf};
 
+mod compiler;
 mod code_generator;
 mod lexical_analyzer;
 mod models;
@@ -8,7 +9,7 @@ mod name_table;
 mod reader;
 mod syntax_analyzer;
 
-use crate::{code_generator::CodeGenerator, reader::Reader, syntax_analyzer::SyntaxAnalyzer};
+use crate::{code_generator::CodeGenerator, compiler::Compiler, lexical_analyzer::LexicalAnalyzer, reader::Reader, syntax_analyzer::SyntaxAnalyzer};
 
 struct TranslatorApp {
     input_path: Option<PathBuf>,
@@ -74,38 +75,61 @@ impl eframe::App for TranslatorApp {
                         self.log_text.push_str("No input text to compile.\n");
                         return;
                     }
-
+                
                     self.log_text.push_str("Starting compilation...\n");
                     CodeGenerator::clear();
-
+                
                     if let Err(e) = Reader::init_with_string(&self.input_text) {
                         self.log_text.push_str(&format!("Reader init error: {e}\n"));
+                        Reader::close();
                         return;
                     }
-
-                    let mut analyzer = SyntaxAnalyzer::new(self.input_text.clone());
-                    if let Err(e) = Reader::init_with_string(&self.input_text) {
-                        self.log_text.push_str(&format!("Reader init error: {e}\n"));
-                    } else {
-                        analyzer.compile();
-                        Reader::close();
-                    }
-
-                    self.output_text = CodeGenerator::get_code().join("\n");
-
-                    if !analyzer.errors.is_empty() {
-                        self.log_text.push_str("Compilation errors found:\n");
-                        for err in analyzer.errors {
-                            self.log_text.push_str(&format!(
-                                "Line {} Col {}: {}\n",
-                                err.line, err.col, err.message
-                            ));
+                
+                    let mut lexer = LexicalAnalyzer::new();
+                    lexer.advance(); // Advance to first token after Reader initialization
+                    let analyzer = SyntaxAnalyzer::new(lexer);
+                    let mut compiler = Compiler::new(analyzer);
+                
+                    match compiler.compile() {
+                        Ok(asm_code) => {
+                            self.output_text = asm_code;
+                            self.log_text.push_str("Compilation finished successfully.\n");
+                            if let Err(e) = fs::write("test.asm", &self.output_text) {
+                                self.log_text.push_str(&format!("Failed to write test.asm: {e}\n"));
+                            } else {
+                                self.log_text.push_str("Generated test.asm successfully.\n");
+                                match std::process::Command::new("tasm").arg("test.asm").output() {
+                                    Ok(output) => {
+                                        self.log_text.push_str(&format!(
+                                            "TASM Output:\n{}",
+                                            String::from_utf8_lossy(&output.stdout)
+                                        ));
+                                        if !output.status.success() {
+                                            self.log_text.push_str(&format!(
+                                                "TASM Errors:\n{}",
+                                                String::from_utf8_lossy(&output.stderr)
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        self.log_text.push_str(&format!(
+                                            "Failed to run TASM: {e}. Ensure TASM is installed and in your system PATH.\n"
+                                        ));
+                                    }
+                                }
+                            }
                         }
-                    } else {
-                        self.log_text
-                            .push_str("Compilation finished successfully.\n");
+                        Err(errors) => {
+                            self.output_text.clear();
+                            self.log_text.push_str("Compilation errors found:\n");
+                            for err in errors {
+                                self.log_text.push_str(&format!(
+                                    "Line {} Col {}: {}\n",
+                                    err.line, err.col, err.message
+                                ));
+                            }
+                        }
                     }
-
                     Reader::close();
                 }
             });

@@ -1,11 +1,8 @@
-use std::collections::HashMap;
-
-use crate::code_generator::CodeGenerator;
 use crate::lexical_analyzer::LexicalAnalyzer;
-use crate::models::{Category, DataType, Lexems};
+use crate::models::{BinOp, Category, DataType, ExprKind, Expression, Lexems, Program, Statement, UnaryOp};
 use crate::name_table::NameTable;
-use crate::reader::Reader;
 
+#[derive(Debug, Clone)]
 pub struct Error {
     pub line: usize,
     pub col: usize,
@@ -16,82 +13,91 @@ pub struct SyntaxAnalyzer {
     pub lexer: LexicalAnalyzer,
     pub name_table: NameTable,
     pub errors: Vec<Error>,
-    input_text: String,
-    current_line: usize,
-    instruction_count: usize,
+    pub current_line: usize,
+    pub instruction_count: usize,
 }
 
 impl SyntaxAnalyzer {
-    pub fn new(input_text: String) -> Self {
-        let mut lexer = LexicalAnalyzer {
-            keywords: HashMap::new(),
-            current_lexem: Lexems::None,
-            current_name: String::new(),
-            name_table: NameTable::new(),
-            line: 1,
-            col: 1,
-        };
+    pub fn new(mut lexer: LexicalAnalyzer) -> Self {
+        println!("[SyntaxAnalyzer] Initializing new SyntaxAnalyzer");
         lexer.init_keywords();
-
-        Self {
+        let analyzer = Self {
             lexer,
             name_table: NameTable::new(),
             errors: Vec::new(),
-            input_text,
             current_line: 0,
             instruction_count: 0,
-        }
+        };
+        println!("[SyntaxAnalyzer] Initialization complete");
+        analyzer
     }
 
-    fn parse_expression(&mut self) -> DataType {
-        // Начинаем с обработки арифметического выражения
-        let mut t = self.parse_add_sub();
-    
-        // Проверяем наличие логических операторов (.AND., .OR., .XOR.)
+    fn can_be_bool(&self, expr: &Expression) -> bool {
+        let result = match &expr.kind {
+            ExprKind::Literal(v) => *v == 0 || *v == 1,
+            ExprKind::Variable(n) => self
+                .name_table
+                .find_by_name(n)
+                .map(|i| i.data_type == DataType::Bool)
+                .unwrap_or(false),
+            _ => expr.typ == DataType::Bool,
+        };
+        println!("[SyntaxAnalyzer] Checking if expression can be bool: expr={:?}, result={}", expr, result);
+        result
+    }
+
+    fn parse_expression(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_expression");
+        let expr = self.parse_logical();
+        println!("[SyntaxAnalyzer] Completed parse_expression: {:?}", expr);
+        expr
+    }
+
+    fn parse_logical(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_logical");
+        let left = self.parse_comparison();
         if matches!(
             self.lexer.current_lexem(),
             Lexems::And | Lexems::Or | Lexems::Xor
         ) {
+            let mut expr = left;
             while matches!(
                 self.lexer.current_lexem(),
                 Lexems::And | Lexems::Or | Lexems::Xor
             ) {
-                let op = self.lexer.current_lexem();
+                let op = match self.lexer.current_lexem() {
+                    Lexems::And => BinOp::And,
+                    Lexems::Or => BinOp::Or,
+                    Lexems::Xor => BinOp::Xor,
+                    _ => unreachable!(),
+                };
+                println!("[SyntaxAnalyzer] Parsing logical operator: {:?}", op);
                 self.lexer.advance();
-                let rhs = self.parse_operand();
-                if t != rhs || t != DataType::Bool {
-                    self.report_error(format!("Type mismatch: expected Bool, found {:?}", rhs));
-                    return DataType::None;
+                let right = self.parse_comparison();
+                if !self.can_be_bool(&expr) || !self.can_be_bool(&right) {
+                    self.report_error(format!("Type mismatch: expected Bool operands for logical operator"));
                 }
-                CodeGenerator::add_instruction("pop bx");
-                CodeGenerator::add_instruction("pop ax");
-                match op {
-                    Lexems::And => {
-                        CodeGenerator::add_instruction("and ax, bx");
-                    }
-                    Lexems::Or => {
-                        CodeGenerator::add_instruction("or ax, bx");
-                    }
-                    Lexems::Xor => {
-                        CodeGenerator::add_instruction("xor ax, bx");
-                    }
-                    _ => {}
-                }
-                CodeGenerator::add_instruction("push ax");
-                t = DataType::Bool;
+                expr = Expression {
+                    kind: ExprKind::Binary {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(right),
+                    },
+                    typ: DataType::Bool,
+                };
             }
-        } else if self.lexer.current_lexem() == Lexems::Not {
-            self.lexer.advance();
-            let sub_t = self.parse_subexpression();
-            if sub_t != DataType::Bool {
-                self.report_error(format!("Expected Bool after .NOT., found {:?}", sub_t));
-                return DataType::None;
-            }
-            CodeGenerator::add_instruction("pop ax");
-            CodeGenerator::add_instruction("xor ax, 1");
-            CodeGenerator::add_instruction("push ax");
-            t = DataType::Bool;
-        } else if matches!(
+            println!("[SyntaxAnalyzer] Completed parse_logical: {:?}", expr);
+            expr
+        } else {
+            println!("[SyntaxAnalyzer] No logical operator, returning: {:?}", left);
+            left
+        }
+    }
+
+    fn parse_comparison(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_comparison");
+        let left = self.parse_add_sub();
+        if matches!(
             self.lexer.current_lexem(),
             Lexems::Equal
                 | Lexems::NotEqual
@@ -100,210 +106,256 @@ impl SyntaxAnalyzer {
                 | Lexems::Greater
                 | Lexems::GreaterOrEqual
         ) {
-            t = self.parse_logical_expression();
-        }
-        t
-    }
-
-    fn parse_add_sub(&mut self) -> DataType {
-        let t = self.parse_mul_div();
-        while self.lexer.current_lexem() == Lexems::Plus
-            || self.lexer.current_lexem() == Lexems::Minus
-        {
-            let op = self.lexer.current_lexem();
+            let op = match self.lexer.current_lexem() {
+                Lexems::Equal => BinOp::Eq,
+                Lexems::NotEqual => BinOp::Ne,
+                Lexems::Less => BinOp::Lt,
+                Lexems::LessOrEqual => BinOp::Le,
+                Lexems::Greater => BinOp::Gt,
+                Lexems::GreaterOrEqual => BinOp::Ge,
+                _ => unreachable!(),
+            };
+            println!("[SyntaxAnalyzer] Parsing comparison operator: {:?}", op);
             self.lexer.advance();
-            let rhs = self.parse_mul_div();
-            if t != rhs && t != DataType::None && rhs != DataType::None {
-                self.report_error(format!("Type mismatch: expected {:?}, found {:?}", t, rhs));
-            }
-            match op {
-                Lexems::Plus => {
-                    CodeGenerator::add_instruction("pop bx");
-                    CodeGenerator::add_instruction("pop ax");
-                    CodeGenerator::add_instruction("add ax, bx");
-                    CodeGenerator::add_instruction("push ax");
-                }
-                Lexems::Minus => {
-                    CodeGenerator::add_instruction("pop bx");
-                    CodeGenerator::add_instruction("pop ax");
-                    CodeGenerator::add_instruction("sub ax, bx");
-                    CodeGenerator::add_instruction("push ax");
-                }
-                _ => {}
-            }
+            let right = self.parse_add_sub();
+            let typ = if left.typ != right.typ || left.typ == DataType::None || right.typ == DataType::None {
+                self.report_error(format!(
+                    "Type mismatch in comparison: expected {:?}, found {:?}",
+                    left.typ, right.typ
+                ));
+                DataType::None
+            } else {
+                DataType::Bool
+            };
+            let expr = Expression {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                typ,
+            };
+            println!("[SyntaxAnalyzer] Completed parse_comparison: {:?}", expr);
+            expr
+        } else {
+            println!("[SyntaxAnalyzer] No comparison operator, returning: {:?}", left);
+            left
         }
-        t
     }
 
-    fn parse_mul_div(&mut self) -> DataType {
-        let t = self.parse_term();
-        while self.lexer.current_lexem() == Lexems::Mul || self.lexer.current_lexem() == Lexems::Div
-        {
-            let op = self.lexer.current_lexem();
+    fn parse_add_sub(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_add_sub");
+        let mut left = self.parse_mul_div();
+        while matches!(self.lexer.current_lexem(), Lexems::Plus | Lexems::Minus) {
+            let op = match self.lexer.current_lexem() {
+                Lexems::Plus => BinOp::Add,
+                Lexems::Minus => BinOp::Sub,
+                _ => unreachable!(),
+            };
+            println!("[SyntaxAnalyzer] Parsing add/sub operator: {:?}", op);
             self.lexer.advance();
-            let rhs = self.parse_term();
-            if t != rhs && t != DataType::None && rhs != DataType::None {
-                self.report_error(format!("Type mismatch: expected {:?}, found {:?}", t, rhs));
-            }
-            match op {
-                Lexems::Mul => {
-                    CodeGenerator::add_instruction("pop bx");
-                    CodeGenerator::add_instruction("pop ax");
-                    CodeGenerator::add_instruction("mul bx");
-                    CodeGenerator::add_instruction("push ax");
-                }
-                Lexems::Div => {
-                    CodeGenerator::add_instruction("pop bx");
-                    CodeGenerator::add_instruction("pop ax");
-                    CodeGenerator::add_instruction("cwd");
-                    CodeGenerator::add_instruction("div bx");
-                    CodeGenerator::add_instruction("push ax");
-                }
-                _ => {}
-            }
+            let right = self.parse_mul_div();
+            let typ = if left.typ != right.typ || left.typ == DataType::None || right.typ == DataType::None {
+                self.report_error(format!(
+                    "Type mismatch in add/sub: expected {:?}, found {:?}",
+                    left.typ, right.typ
+                ));
+                DataType::None
+            } else {
+                left.typ.clone()
+            };
+            left = Expression {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                typ,
+            };
         }
-        t
+        println!("[SyntaxAnalyzer] Completed parse_add_sub: {:?}", left);
+        left
     }
 
-    fn parse_term(&mut self) -> DataType {
-        let lex = self.lexer.current_lexem();
-        match lex {
-            Lexems::Name => {
-                let name = self.lexer.current_name().to_string();
-                if let Some(ident) = self.name_table.find_by_name(&name) {
-                    match ident.category {
-                        Category::Var => {
-                            CodeGenerator::add_instruction(&format!("mov ax, [{}]", name));
-                            CodeGenerator::add_instruction("push ax");
-                            self.lexer.advance();
-                            ident.data_type.clone()
-                        }
-                        Category::Const => {
-                            if let Some(value) = ident.value {
-                                CodeGenerator::add_instruction(&format!("mov ax, {}", value));
-                                CodeGenerator::add_instruction("push ax");
-                                self.lexer.advance();
-                                ident.data_type.clone()
-                            } else {
-                                self.report_error(format!("Constant '{}' has no value", name));
-                                DataType::None
-                            }
-                        }
-                    }
-                } else {
-                    self.report_error(format!("Undeclared identifier '{}'", name));
-                    DataType::None
-                }
-            }
-            Lexems::Number => {
-                let value = self.lexer.current_name();
-                CodeGenerator::add_instruction(&format!("mov ax, {}", value));
-                CodeGenerator::add_instruction("push ax");
+    fn parse_mul_div(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_mul_div");
+        let mut left = self.parse_term();
+        while matches!(self.lexer.current_lexem(), Lexems::Mul | Lexems::Div) {
+            let op = match self.lexer.current_lexem() {
+                Lexems::Mul => BinOp::Mul,
+                Lexems::Div => BinOp::Div,
+                _ => unreachable!(),
+            };
+            println!("[SyntaxAnalyzer] Parsing mul/div operator: {:?}", op);
+            self.lexer.advance();
+            let right = self.parse_term();
+            let typ = if left.typ != right.typ || left.typ == DataType::None || right.typ == DataType::None {
+                self.report_error(format!(
+                    "Type mismatch in mul/div: expected {:?}, found {:?}",
+                    left.typ, right.typ
+                ));
+                DataType::None
+            } else {
+                left.typ.clone()
+            };
+            left = Expression {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(left),
+                    right: Box::new(right),
+                },
+                typ,
+            };
+        }
+        println!("[SyntaxAnalyzer] Completed parse_mul_div: {:?}", left);
+        left
+    }
+
+    fn parse_term(&mut self) -> Expression {
+        println!("[SyntaxAnalyzer] Starting parse_term");
+        if self.lexer.current_lexem() == Lexems::Not {
+            println!("[SyntaxAnalyzer] Parsing unary .NOT.");
+            self.lexer.advance();
+            let expr = self.parse_term();
+            let typ = if expr.typ != DataType::Bool {
+                self.report_error(format!("Expected Bool after .NOT., found {:?}", expr.typ));
+                DataType::None
+            } else {
+                DataType::Bool
+            };
+            let result = Expression {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(expr),
+                },
+                typ,
+            };
+            println!("[SyntaxAnalyzer] Completed parse_term (unary): {:?}", result);
+            result
+        } else if self.lexer.current_lexem() == Lexems::LParen {
+            println!("[SyntaxAnalyzer] Parsing parenthesized expression");
+            self.lexer.advance();
+            let expr = self.parse_expression();
+            self.expect_lexem(Lexems::RParen);
+            println!("[SyntaxAnalyzer] Completed parse_term (parens): {:?}", expr);
+            expr
+        } else if self.lexer.current_lexem() == Lexems::Begin {
+            println!("[SyntaxAnalyzer] Parsing begin-end expression");
+            self.lexer.advance();
+            let expr = self.parse_expression();
+            self.expect_lexem(Lexems::End);
+            println!("[SyntaxAnalyzer] Completed parse_term (begin-end): {:?}", expr);
+            expr
+        } else if self.lexer.current_lexem() == Lexems::Name {
+            let name = self.lexer.current_name();
+            println!("[SyntaxAnalyzer] Parsing identifier: '{}'", name);
+            if let Some(ident) = self.name_table.find_by_name(&name) {
+                let typ = ident.data_type.clone();
                 self.lexer.advance();
-                DataType::Int
+                let expr = Expression {
+                    kind: ExprKind::Variable(name),
+                    typ,
+                };
+                println!("[SyntaxAnalyzer] Completed parse_term (variable): {:?}", expr);
+                expr
+            } else {
+                self.report_error(format!("Undeclared identifier '{}'", name));
+                self.lexer.advance();
+                let expr = Expression {
+                    kind: ExprKind::Literal(0),
+                    typ: DataType::None,
+                };
+                println!("[SyntaxAnalyzer] Completed parse_term (undeclared): {:?}", expr);
+                expr
             }
-            _ => {
-                if lex == Lexems::NewLine {
-                    self.lexer.advance();
-                    self.parse_term()
-                } else if lex == Lexems::Error {
-                    self.report_error("Unexpected token".to_string());
-                    self.lexer.advance();
-                    DataType::None
-                } else if lex == Lexems::EOF {
-                    DataType::None
-                } else if lex == Lexems::Begin {
-                    self.lexer.advance();
-                    let t = self.parse_expression();
-                    self.expect_lexem(Lexems::End);
-                    t
-                } else {
-                    self.report_error("Unexpected token in expression".to_string());
-                    self.lexer.advance();
-                    DataType::None
-                }
-            }
+        } else if self.lexer.current_lexem() == Lexems::Number {
+            let value_str = self.lexer.current_name();
+            let value = value_str.parse::<i32>().unwrap_or(0);
+            println!("[SyntaxAnalyzer] Parsing number: '{}'", value_str);
+            self.lexer.advance();
+            let expr = Expression {
+                kind: ExprKind::Literal(value),
+                typ: DataType::Int,
+            };
+            println!("[SyntaxAnalyzer] Completed parse_term (number): {:?}", expr);
+            expr
+        } else {
+            self.report_error("Unexpected token in expression".to_string());
+            self.lexer.advance();
+            let expr = Expression {
+                kind: ExprKind::Literal(0),
+                typ: DataType::None,
+            };
+            println!("[SyntaxAnalyzer] Completed parse_term (error): {:?}", expr);
+            expr
         }
     }
 
-    fn parse_assignment(&mut self) {
+    fn parse_assignment(&mut self) -> Vec<Statement> {
+        println!("[SyntaxAnalyzer] Starting parse_assignment at line {}", self.lexer.line);
         if self.instruction_count > 0 && self.current_line == self.lexer.line {
             self.report_error("Only one assignment per line allowed".to_string());
-            return;
+            self.lexer.advance();
+            println!("[SyntaxAnalyzer] Aborted parse_assignment due to multiple assignments");
+            return vec![];
         }
         self.instruction_count += 1;
 
-        let name = self.lexer.current_name().to_string();
+        let name = self.lexer.current_name();
+        println!("[SyntaxAnalyzer] Parsing assignment to identifier: '{}'", name);
         if self.name_table.find_by_name(&name).is_none() {
             self.report_error(format!("Undeclared identifier '{}'", name));
             self.lexer.advance();
-            return;
+            println!("[SyntaxAnalyzer] Aborted parse_assignment due to undeclared identifier");
+            return vec![];
         }
         self.lexer.advance();
-        if self.lexer.current_lexem() != Lexems::Equal
-            && self.lexer.current_lexem() != Lexems::Assign
-        {
+        if !matches!(self.lexer.current_lexem(), Lexems::Equal | Lexems::Assign) {
             self.report_error("Expected '=' or ':=' after identifier".to_string());
-            return;
+            println!("[SyntaxAnalyzer] Aborted parse_assignment due to missing assignment operator");
+            return vec![];
         }
         self.lexer.advance();
 
-        // Проверяем тип переменной
         let expected_type = self
             .name_table
             .find_by_name(&name)
-            .map_or(DataType::None, |ident| ident.data_type.clone());
+            .map(|i| i.data_type.clone())
+            .unwrap_or(DataType::None);
+        println!("[SyntaxAnalyzer] Expected type for '{}': {:?}", name, expected_type);
 
-        // Проверяем, является ли выражение простым числом
-        if self.lexer.current_lexem() == Lexems::Number {
-            let value = self.lexer.current_name();
-            let data_type = if expected_type == DataType::Bool {
-                if value != "0" && value != "1" {
-                    self.report_error(format!(
-                        "Invalid constant '{}', expected 0 or 1 for Boolean",
-                        value
-                    ));
-                    self.lexer.advance();
-                    return;
-                }
-                DataType::Bool
-            } else {
-                DataType::Int
-            };
-            if expected_type != DataType::None && expected_type != data_type {
+        let expr = self.parse_expression();
+        let mut typ_mismatch = false;
+        if expected_type == DataType::Bool {
+            if !self.can_be_bool(&expr) {
                 self.report_error(format!(
-                    "Type mismatch: variable '{}' expected {:?}, got {:?}",
-                    name, expected_type, data_type
+                    "Type mismatch: variable '{}' expected Bool, got invalid value for Bool",
+                    name
                 ));
-                return;
+                typ_mismatch = true;
             }
-            self.name_table
-                .add_or_update(name.clone(), Category::Var, data_type, None);
-            CodeGenerator::add_instruction(&format!("mov ax, {}", value));
-            CodeGenerator::add_instruction(&format!("mov [{}], ax", name));
-            self.lexer.advance();
-        } else {
-            // Для сложных выражений используем parse_expression
-            let data_type = self.parse_expression();
-            if expected_type != DataType::None && expected_type != data_type {
-                self.report_error(format!(
-                    "Type mismatch: variable '{}' expected {:?}, got {:?}",
-                    name, expected_type, data_type
-                ));
-                return;
-            }
-            self.name_table
-                .add_or_update(name.clone(), Category::Var, data_type, None);
-            CodeGenerator::add_instruction("pop ax");
-            CodeGenerator::add_instruction(&format!("mov [{}], ax", name));
+        } else if expected_type != expr.typ {
+            self.report_error(format!(
+                "Type mismatch: variable '{}' expected {:?}, got {:?}",
+                name, expected_type, expr.typ
+            ));
+            typ_mismatch = true;
+        }
+        if typ_mismatch {
+            println!("[SyntaxAnalyzer] Aborted parse_assignment due to type mismatch");
+            return vec![];
         }
 
         if self.lexer.current_lexem() == Lexems::Semi {
             self.lexer.advance();
         }
+
+        let stmt = vec![Statement::Assign { name, expr }];
+        println!("[SyntaxAnalyzer] Completed parse_assignment: {:?}", stmt);
+        stmt
     }
 
-    fn report_error(&mut self, message: String) {
+    pub fn report_error(&mut self, message: String) {
         eprintln!(
             "[ERROR] Line {}, Col {}: {} -- Token: {:?}, Name: '{}'",
             self.lexer.line,
@@ -320,6 +372,7 @@ impl SyntaxAnalyzer {
     }
 
     fn expect_lexem(&mut self, expected: Lexems) {
+        println!("[SyntaxAnalyzer] Expecting lexem: {:?}", expected);
         if self.lexer.current_lexem() != expected {
             self.report_error(format!(
                 "Expected {:?}, found {:?} ('{}')",
@@ -331,58 +384,79 @@ impl SyntaxAnalyzer {
         self.lexer.advance();
     }
 
-    fn maybe_advance(&mut self) {
-        while self.lexer.current_lexem() == Lexems::NewLine
-            || self.lexer.current_lexem() == Lexems::Semi
-            || self.lexer.current_lexem() == Lexems::EndWhile
-        {
+    pub fn maybe_advance(&mut self) {
+        println!("[SyntaxAnalyzer] Starting maybe_advance");
+        while matches!(self.lexer.current_lexem(), Lexems::NewLine | Lexems::Semi) {
+            println!("[SyntaxAnalyzer] Skipping token: {:?}", self.lexer.current_lexem());
             self.lexer.advance();
         }
+        println!("[SyntaxAnalyzer] Completed maybe_advance, current lexem: {:?}", self.lexer.current_lexem());
     }
 
-    fn parse_print(&mut self) {
+    fn parse_print(&mut self) -> Vec<Statement> {
+        println!("[SyntaxAnalyzer] Starting parse_print");
         if self.instruction_count > 0 && self.current_line == self.lexer.line {
             self.report_error("Only one instruction per line allowed".to_string());
-            return;
+            println!("[SyntaxAnalyzer] Aborted parse_print due to multiple instructions");
+            return vec![];
         }
         self.instruction_count += 1;
 
         self.lexer.advance();
         if self.lexer.current_lexem() == Lexems::Name {
-            let value = self.lexer.current_name().to_string();
-            if let Some(ident) = self.name_table.find_by_name(&value) {
-                if ident.data_type == DataType::Bool {
-                    CodeGenerator::add_instruction(&format!("mov ax, [{}]", value));
-                    CodeGenerator::add_instruction("CALL PRINT");
-                } else {
-                    CodeGenerator::add_instruction(&format!("mov ax, [{}]", value));
-                    CodeGenerator::add_instruction("CALL PRINT_INT"); // Новая процедура для int
-                }
+            let var = self.lexer.current_name();
+            println!("[SyntaxAnalyzer] Parsing print for variable: '{}'", var);
+            if self.name_table.find_by_name(&var).is_some() {
                 self.lexer.advance();
+                let stmt = vec![Statement::Print { var }];
+                println!("[SyntaxAnalyzer] Completed parse_print: {:?}", stmt);
+                stmt
             } else {
-                self.report_error(format!("Undeclared identifier '{}'", value));
+                self.report_error(format!("Undeclared identifier '{}'", var));
                 self.lexer.advance();
+                println!("[SyntaxAnalyzer] Aborted parse_print due to undeclared identifier");
+                vec![]
             }
         } else {
             self.report_error("Expected identifier after 'print'".to_string());
             self.lexer.advance();
+            println!("[SyntaxAnalyzer] Aborted parse_print due to missing identifier");
+            vec![]
         }
     }
 
-    pub fn parse_instruction(&mut self) {
+    fn parse_statement(&mut self) -> Vec<Statement> {
+        println!("[SyntaxAnalyzer] Starting parse_statement at line {}", self.lexer.line);
         self.maybe_advance();
-        match self.lexer.current_lexem() {
-            Lexems::Print => self.parse_print(),
-            Lexems::Name => self.parse_assignment(),
-            Lexems::Int | Lexems::Bool => self.parse_variable_declarations(),
-            Lexems::Begin => {
-                self.lexer.advance();
-                self.parse_instructions(&[Lexems::End]);
-                self.expect_lexem(Lexems::End);
+        let result = match self.lexer.current_lexem() {
+            Lexems::Print => {
+                println!("[SyntaxAnalyzer] Parsing print statement");
+                self.parse_print()
             }
-            Lexems::If => self.parse_if(),
-            Lexems::While => self.parse_while(),
-            Lexems::EOF => {}
+            Lexems::Name => {
+                println!("[SyntaxAnalyzer] Parsing assignment statement");
+                self.parse_assignment()
+            }
+            Lexems::Int | Lexems::Bool => {
+                println!("[SyntaxAnalyzer] Parsing variable declaration");
+                self.parse_variable_declarations()
+            }
+            Lexems::Begin => {
+                println!("[SyntaxAnalyzer] Parsing block");
+                vec![self.parse_block()]
+            }
+            Lexems::If => {
+                println!("[SyntaxAnalyzer] Parsing if statement");
+                vec![self.parse_if()]
+            }
+            Lexems::While => {
+                println!("[SyntaxAnalyzer] Parsing while statement");
+                vec![self.parse_while()]
+            }
+            Lexems::EOF => {
+                println!("[SyntaxAnalyzer] Reached EOF");
+                vec![]
+            }
             _ => {
                 self.report_error(format!(
                     "Unexpected token in instruction: {:?} ('{}')",
@@ -390,213 +464,209 @@ impl SyntaxAnalyzer {
                     self.lexer.current_name()
                 ));
                 self.lexer.advance();
+                println!("[SyntaxAnalyzer] Aborted parse_statement due to unexpected token");
+                vec![]
             }
-        }
+        };
+        println!("[SyntaxAnalyzer] Completed parse_statement: {:?}", result);
+        result
     }
 
-    fn parse_instructions(&mut self, end_tokens: &[Lexems]) {
+    fn parse_statements(&mut self, end_tokens: &[Lexems]) -> Vec<Statement> {
+        println!("[SyntaxAnalyzer] Starting parse_statements, end_tokens: {:?}", end_tokens);
+        let mut stmts = vec![];
         while !end_tokens.contains(&self.lexer.current_lexem())
             && self.lexer.current_lexem() != Lexems::EOF
         {
-            self.parse_instruction();
+            stmts.extend(self.parse_statement());
         }
+        println!("[SyntaxAnalyzer] Completed parse_statements, {} statements", stmts.len());
+        stmts
     }
 
-    fn parse_variable_declarations(&mut self) {
-        if self.instruction_count > 0 && self.current_line == self.lexer.line {
+    fn parse_variable_declarations(&mut self) -> Vec<Statement> {
+        println!("[SyntaxAnalyzer] Starting parse_variable_declarations at line {}", self.lexer.line);
+        if self.instruction_count > 0 && self.lexer.line == self.current_line {
             self.report_error("Only one declaration per line allowed".to_string());
-            return;
+            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to multiple declarations");
+            return vec![];
         }
         self.instruction_count += 1;
 
         let is_const = self.lexer.current_name().to_lowercase().ends_with("_const");
-        let data_type = match self.lexer.current_lexem() {
+        let typ = match self.lexer.current_lexem() {
             Lexems::Int => DataType::Int,
             Lexems::Bool => DataType::Bool,
             _ => {
                 self.report_error("Expected 'int' or 'bool'".to_string());
                 self.lexer.advance();
-                return;
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to invalid type");
+                return vec![];
             }
         };
+        println!("[SyntaxAnalyzer] Parsing variable declaration: type={:?}, is_const={}", typ, is_const);
         self.lexer.advance();
         if self.lexer.current_lexem() != Lexems::Name {
             self.report_error("Expected variable name".to_string());
-            return;
+            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to missing variable name");
+            return vec![];
         }
-        let mut names = vec![self.lexer.current_name().to_string()];
+        let mut names = vec![self.lexer.current_name()];
         self.lexer.advance();
         while self.lexer.current_lexem() == Lexems::Comma {
             self.lexer.advance();
             if self.lexer.current_lexem() != Lexems::Name {
                 self.report_error("Expected variable name after comma".to_string());
-                return;
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to missing variable name after comma");
+                return vec![];
             }
-            names.push(self.lexer.current_name().to_string());
+            names.push(self.lexer.current_name());
             self.lexer.advance();
         }
+        let init: Option<Expression>;
         if self.lexer.current_lexem() == Lexems::Colon {
             self.lexer.advance();
-            for name in names {
+            init = None;
+            for name in &names {
                 self.name_table.add_or_update(
                     name.clone(),
-                    if is_const {
-                        Category::Const
-                    } else {
-                        Category::Var
-                    },
-                    data_type.clone(),
+                    if is_const { Category::Const } else { Category::Var },
+                    typ.clone(),
                     None,
                 );
             }
         } else if self.lexer.current_lexem() == Lexems::Assign {
             self.lexer.advance();
-            let expr_type = self.parse_expression();
-            let value = if is_const && self.lexer.current_lexem() == Lexems::Number {
-                if data_type == DataType::Bool {
-                    let value = self.lexer.current_name();
-                    if value != "0" && value != "1" {
-                        self.report_error(format!(
-                            "Invalid constant '{}', expected 0 or 1 for Boolean",
-                            value
-                        ));
-                        return;
+            if names.len() > 1 {
+                self.report_error("Multiple variables cannot have initializer".to_string());
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to multiple initializers");
+                return vec![];
+            }
+            if is_const {
+                if self.lexer.current_lexem() == Lexems::Number {
+                    let value_str = self.lexer.current_name();
+                    if let Ok(v) = value_str.parse::<i32>() {
+                        if typ == DataType::Bool && v != 0 && v != 1 {
+                            self.report_error(format!(
+                                "Invalid constant '{}', expected 0 or 1 for Boolean",
+                                value_str
+                            ));
+                            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to invalid boolean constant");
+                            return vec![];
+                        }
+                        init = Some(Expression {
+                            kind: ExprKind::Literal(v),
+                            typ: typ.clone(),
+                        });
+                        self.lexer.advance();
+                        self.name_table.add_or_update(
+                            names[0].clone(),
+                            Category::Const,
+                            typ.clone(),
+                            Some(v),
+                        );
+                    } else {
+                        self.report_error("Invalid number".to_string());
+                        println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to invalid number");
+                        return vec![];
                     }
-                }
-                self.lexer.current_name().parse::<i32>().ok()
-            } else {
-                None
-            };
-            if expr_type != data_type && expr_type != DataType::None {
-                self.report_error(format!(
-                    "Type mismatch: expected {:?}, found {:?}",
-                    data_type, expr_type
-                ));
-                return;
-            }
-            self.name_table.add_or_update(
-                names[0].clone(),
-                if is_const {
-                    Category::Const
                 } else {
-                    Category::Var
-                },
-                data_type,
-                value,
-            );
-            if !is_const {
-                CodeGenerator::add_instruction("pop ax");
-                CodeGenerator::add_instruction(&format!("mov [{}], ax", names[0]));
+                    self.report_error("Constant must be initialized with a number literal".to_string());
+                    self.skip_expression();
+                    println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to non-numeric constant initializer");
+                    return vec![];
+                }
+            } else {
+                let expr = self.parse_expression();
+                if expr.typ != typ {
+                    self.report_error(format!(
+                        "Type mismatch: expected {:?}, found {:?}",
+                        typ, expr.typ
+                    ));
+                    println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to type mismatch");
+                    return vec![];
+                }
+                init = Some(expr);
+                self.name_table.add_or_update(
+                    names[0].clone(),
+                    Category::Var,
+                    typ.clone(),
+                    None,
+                );
             }
-            if self.lexer.current_lexem() == Lexems::Semi {
-                self.lexer.advance();
-            } else if self.lexer.current_lexem() != Lexems::NewLine
-                && self.lexer.current_lexem() != Lexems::EOF
-            {
-                self.report_error("Expected ';' or newline after variable declaration".to_string());
-            }
-        } else {
-            self.report_error("Expected ',' or ':=' or ':' after variable name".to_string());
-        }
-    }
-
-    pub fn compile(&mut self) {
-        CodeGenerator::clear();
-        if let Err(e) = Reader::init_with_string(&self.input_text) {
-            self.report_error(format!("Reader init error: {}", e));
-            return;
-        }
-        self.lexer.advance();
-
-        // Первый проход: сбор объявлений
-        while self.lexer.current_lexem() == Lexems::Int
-            || self.lexer.current_lexem() == Lexems::Bool
-        {
-            self.parse_variable_declarations_no_code();
-            self.maybe_advance();
-        }
-        // Проверка вычислений
-        if self.lexer.current_lexem() == Lexems::Begin {
+        } else if self.lexer.current_lexem() == Lexems::Semi {
             self.lexer.advance();
-            self.skip_block(&[Lexems::End]);
-            if self.lexer.current_lexem() == Lexems::End {
-                self.lexer.advance();
+            init = None;
+            for name in &names {
+                self.name_table.add_or_update(
+                    name.clone(),
+                    if is_const { Category::Const } else { Category::Var },
+                    typ.clone(),
+                    None,
+                );
             }
         } else {
-            self.report_error("Expected 'Begin' for computations".to_string());
+            self.report_error("Expected ':', ':=', or ';' after variable name(s)".to_string());
+            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to unexpected token");
+            return vec![];
         }
-        // Проверка print
-        self.maybe_advance();
-        if self.lexer.current_lexem() == Lexems::Print {
-            self.parse_instruction_no_code();
-        } else {
-            self.report_error("Expected 'print' statement".to_string());
-        }
-        self.maybe_advance();
-        if self.lexer.current_lexem() != Lexems::EOF {
-            self.report_error("Unexpected tokens after program".to_string());
-        }
-        Reader::close();
-
-        // Генерация кода
-        CodeGenerator::declare_data_segment();
-        CodeGenerator::declare_variables(&self.name_table);
-        CodeGenerator::add_instruction("PRINT_BUF DB ' ' DUP(10)");
-        CodeGenerator::add_instruction("BUFEND    DB '$'");
-        CodeGenerator::add_instruction("data ends");
-        CodeGenerator::add_instruction("stk segment stack");
-        CodeGenerator::add_instruction("db 256 dup ('?')");
-        CodeGenerator::add_instruction("stk ends");
-        CodeGenerator::add_instruction("code segment para public 'code'");
-        CodeGenerator::add_instruction("main proc");
-        CodeGenerator::add_instruction("assume cs:code,ds:data,ss:stk");
-        CodeGenerator::add_instruction("mov ax,data");
-        CodeGenerator::add_instruction("mov ds,ax");
-
-        if let Err(e) = Reader::init_with_string(&self.input_text) {
-            self.report_error(format!("Reader init error: {}", e));
-            return;
-        }
-        self.lexer.advance();
-        self.current_line = 0;
-        self.instruction_count = 0;
-
-        // Второй проход: генерация кода
-        while self.lexer.current_lexem() == Lexems::Int
-            || self.lexer.current_lexem() == Lexems::Bool
-        {
-            self.parse_variable_declarations();
-            self.maybe_advance();
-        }
-        if self.lexer.current_lexem() == Lexems::Begin {
-            self.parse_computations();
-        } else {
-            self.report_error("Expected 'Begin' for computations".to_string());
-        }
-        self.maybe_advance();
-        if self.lexer.current_lexem() == Lexems::Print {
-            self.parse_print();
-        } else {
-            self.report_error("Expected 'print' statement".to_string());
-        }
-        self.maybe_advance();
-        if self.lexer.current_lexem() != Lexems::EOF {
-            self.report_error("Unexpected tokens after program".to_string());
-        }
-        Reader::close();
-
-        CodeGenerator::add_instruction("mov ax,4c00h");
-        CodeGenerator::add_instruction("int 21h");
-        CodeGenerator::add_instruction("main endp");
-        CodeGenerator::declare_print_procedure();
-        CodeGenerator::add_instruction("code ends");
-        CodeGenerator::add_instruction("end main");
+        let stmt = vec![Statement::VarDecl {
+            typ,
+            is_const,
+            names,
+            init,
+        }];
+        println!("[SyntaxAnalyzer] Completed parse_variable_declarations: {:?}", stmt);
+        stmt
     }
 
-    fn parse_instruction_no_code(&mut self) {
+    pub fn parse_program(&mut self) -> Program {
+        println!("[SyntaxAnalyzer] Starting parse_program");
+        let mut stmts = vec![];
+        self.current_line = self.lexer.line;
+
+        while matches!(self.lexer.current_lexem(), Lexems::Int | Lexems::Bool) {
+            println!("[SyntaxAnalyzer] Parsing variable declarations");
+            stmts.extend(self.parse_statement());
+            self.current_line = self.lexer.line;
+        }
+
+        if self.lexer.current_lexem() == Lexems::Begin {
+            println!("[SyntaxAnalyzer] Parsing computation block");
+            stmts.extend(self.parse_statement());
+        } else {
+            self.report_error("Expected 'Begin' for computations".to_string());
+            println!("[SyntaxAnalyzer] Missing 'Begin' for computation block");
+        }
+
+        self.maybe_advance();
+
+        if self.lexer.current_lexem() == Lexems::Print {
+            println!("[SyntaxAnalyzer] Parsing print statement");
+            stmts.extend(self.parse_statement());
+        } else {
+            self.report_error("Expected 'print' statement".to_string());
+            println!("[SyntaxAnalyzer] Missing 'print' statement");
+        }
+
+        self.maybe_advance();
+
+        if self.lexer.current_lexem() != Lexems::EOF {
+            self.report_error("Unexpected tokens after program".to_string());
+            println!("[SyntaxAnalyzer] Found unexpected tokens after program");
+        }
+
+        let program = Program { stmts };
+        println!("[SyntaxAnalyzer] Completed parse_program: {} statements", program.stmts.len());
+        program
+    }
+
+    pub fn parse_instruction_no_code(&mut self) {
+        println!("[SyntaxAnalyzer] Starting parse_instruction_no_code");
         self.maybe_advance();
         match self.lexer.current_lexem() {
             Lexems::Print => {
+                println!("[SyntaxAnalyzer] Processing print instruction");
                 self.lexer.advance();
                 if self.lexer.current_lexem() == Lexems::Name
                     || self.lexer.current_lexem() == Lexems::Number
@@ -609,6 +679,7 @@ impl SyntaxAnalyzer {
             }
             Lexems::Name => {
                 let name = self.lexer.current_name().to_string();
+                println!("[SyntaxAnalyzer] Processing identifier: '{}'", name);
                 self.lexer.advance();
                 if self.lexer.current_lexem() == Lexems::Assign
                     || self.lexer.current_lexem() == Lexems::Equal
@@ -621,6 +692,7 @@ impl SyntaxAnalyzer {
                             if self.lexer.current_lexem() == Lexems::Semi {
                                 self.lexer.advance();
                             }
+                            println!("[SyntaxAnalyzer] Aborted due to assignment to constant");
                             return;
                         }
                     }
@@ -632,22 +704,36 @@ impl SyntaxAnalyzer {
                     if self.name_table.find_by_name(&name).is_none() {
                         self.name_table
                             .add_or_update(name, Category::Var, DataType::Int, None);
+                        // println!("[SyntaxAnalyzer] Added undeclared identifier '{}' to name table", name);
                     }
                 } else {
                     self.report_error(format!("Expected ':=' or '=' after identifier '{}'", name));
+                    println!("[SyntaxAnalyzer] Aborted due to missing assignment operator");
                 }
             }
-            Lexems::Int | Lexems::Bool => self.parse_variable_declarations_no_code(),
-            Lexems::If => self.skip_if_no_code(),
-            Lexems::While => self.skip_while_no_code(),
+            Lexems::Int | Lexems::Bool => {
+                println!("[SyntaxAnalyzer] Processing variable declaration");
+                self.parse_variable_declarations_no_code()
+            }
+            Lexems::If => {
+                println!("[SyntaxAnalyzer] Skipping if statement");
+                self.skip_if_no_code()
+            }
+            Lexems::While => {
+                println!("[SyntaxAnalyzer] Skipping while statement");
+                self.skip_while_no_code()
+            }
             Lexems::Begin => {
+                println!("[SyntaxAnalyzer] Skipping block");
                 self.lexer.advance();
                 self.skip_block(&[Lexems::End]);
                 if self.lexer.current_lexem() == Lexems::End {
                     self.lexer.advance();
                 }
             }
-            Lexems::EOF => {}
+            Lexems::EOF => {
+                println!("[SyntaxAnalyzer] Reached EOF");
+            }
             _ => {
                 self.report_error(format!(
                     "Unexpected token in instruction: {:?} ('{}')",
@@ -655,11 +741,14 @@ impl SyntaxAnalyzer {
                     self.lexer.current_name()
                 ));
                 self.lexer.advance();
+                println!("[SyntaxAnalyzer] Aborted due to unexpected token");
             }
         }
+        println!("[SyntaxAnalyzer] Completed parse_instruction_no_code");
     }
 
-    fn parse_variable_declarations_no_code(&mut self) {
+    pub fn parse_variable_declarations_no_code(&mut self) {
+        println!("[SyntaxAnalyzer] Starting parse_variable_declarations_no_code");
         let is_const = self.lexer.current_name().to_lowercase().ends_with("_const");
         let data_type = match self.lexer.current_lexem() {
             Lexems::Int => DataType::Int,
@@ -667,94 +756,86 @@ impl SyntaxAnalyzer {
             _ => {
                 self.report_error("Expected 'int' or 'bool'".to_string());
                 self.lexer.advance();
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to invalid type");
                 return;
             }
         };
+        println!("[SyntaxAnalyzer] Declaration type: {:?}", data_type);
         self.lexer.advance();
         if self.lexer.current_lexem() != Lexems::Name {
             self.report_error("Expected variable name".to_string());
+            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to missing variable name");
             return;
         }
-        let mut names = vec![self.lexer.current_name().to_string()];
+        let mut names = vec![self.lexer.current_name()];
         self.lexer.advance();
         while self.lexer.current_lexem() == Lexems::Comma {
             self.lexer.advance();
             if self.lexer.current_lexem() != Lexems::Name {
                 self.report_error("Expected variable name after comma".to_string());
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to missing variable name after comma");
                 return;
             }
-            names.push(self.lexer.current_name().to_string());
+            names.push(self.lexer.current_name());
             self.lexer.advance();
         }
+        let mut value = None;
         if self.lexer.current_lexem() == Lexems::Colon {
             self.lexer.advance();
-            for name in names {
-                self.name_table.add_or_update(
-                    name,
-                    if is_const {
-                        Category::Const
-                    } else {
-                        Category::Var
-                    },
-                    data_type.clone(),
-                    None,
-                );
+            if self.lexer.current_lexem() == Lexems::Assign {
+                self.report_error("Unexpected ':=' after ':' in declaration".to_string());
+                self.lexer.advance();
+                self.skip_expression();
+                println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to unexpected ':='");
+                return;
             }
         } else if self.lexer.current_lexem() == Lexems::Assign {
             self.lexer.advance();
-            let value = if is_const && self.lexer.current_lexem() == Lexems::Number {
-                if data_type == DataType::Bool {
-                    let value = self.lexer.current_name();
-                    if value != "0" && value != "1" {
-                        self.report_error(format!(
-                            "Invalid constant '{}', expected 0 or 1 for Boolean",
-                            value
-                        ));
+            if is_const {
+                if self.lexer.current_lexem() == Lexems::Number {
+                    let value_str = self.lexer.current_name();
+                    if let Ok(num) = value_str.parse::<i32>() {
+                        if data_type == DataType::Bool && num != 0 && num != 1 {
+                            self.report_error(format!(
+                                "Invalid constant '{}', expected 0 or 1 for Boolean",
+                                value_str
+                            ));
+                        } else {
+                            value = Some(num);
+                        }
                         self.lexer.advance();
-                        return;
+                    } else {
+                        self.report_error("Invalid number".to_string());
                     }
+                } else {
+                    self.report_error("Constant must be initialized with a number literal".to_string());
+                    self.skip_expression();
+                    println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to non-numeric constant initializer");
+                    return;
                 }
-                let num = self.lexer.current_name().parse::<i32>().ok();
-                self.lexer.advance();
-                num
             } else {
                 self.skip_expression();
-                None
-            };
-            self.name_table.add_or_update(
-                names[0].clone(),
-                if is_const {
-                    Category::Const
-                } else {
-                    Category::Var
-                },
-                data_type,
-                value,
-            );
-            if self.lexer.current_lexem() == Lexems::Semi {
-                self.lexer.advance();
             }
+        } else if self.lexer.current_lexem() == Lexems::Semi {
+            self.lexer.advance();
         } else {
-            self.report_error("Expected ',' or ':=' after variable name".to_string());
-        }
-    }
-
-    fn parse_computations(&mut self) {
-        if self.instruction_count > 0 && self.current_line == self.lexer.line {
-            self.report_error("Only one instruction per line allowed".to_string());
+            self.report_error("Expected ':', ':=', or ';' after variable name(s)".to_string());
+            println!("[SyntaxAnalyzer] Aborted parse_variable_declarations_no_code due to unexpected token");
             return;
         }
-        self.instruction_count += 1;
-
-        self.expect_lexem(Lexems::Begin);
-        while self.lexer.current_lexem() != Lexems::End && self.lexer.current_lexem() != Lexems::EOF
-        {
-            self.parse_instruction();
+        for name in names.iter() {
+            self.name_table.add_or_update(
+                name.clone(),
+                if is_const { Category::Const } else { Category::Var },
+                data_type.clone(),
+                if name == &names[0] { value } else { None },
+            );
         }
-        self.expect_lexem(Lexems::End);
+        println!("[SyntaxAnalyzer] Completed parse_variable_declarations_no_code: names={:?}, value={:?}", names, value);
     }
 
     fn skip_expression(&mut self) {
+        println!("[SyntaxAnalyzer] Starting skip_expression");
         while self.lexer.current_lexem() != Lexems::Semi
             && self.lexer.current_lexem() != Lexems::EOF
             && self.lexer.current_lexem() != Lexems::Then
@@ -762,17 +843,21 @@ impl SyntaxAnalyzer {
         {
             self.lexer.advance();
         }
+        println!("[SyntaxAnalyzer] Completed skip_expression, current lexem: {:?}", self.lexer.current_lexem());
     }
 
-    fn skip_block(&mut self, end_tokens: &[Lexems]) {
+    pub fn skip_block(&mut self, end_tokens: &[Lexems]) {
+        println!("[SyntaxAnalyzer] Starting skip_block, end_tokens: {:?}", end_tokens);
         while !end_tokens.contains(&self.lexer.current_lexem())
             && self.lexer.current_lexem() != Lexems::EOF
         {
             self.parse_instruction_no_code();
         }
+        println!("[SyntaxAnalyzer] Completed skip_block");
     }
 
     fn skip_if_no_code(&mut self) {
+        println!("[SyntaxAnalyzer] Starting skip_if_no_code");
         self.lexer.advance();
         self.skip_expression();
         if self.lexer.current_lexem() == Lexems::Then {
@@ -794,225 +879,95 @@ impl SyntaxAnalyzer {
         if self.lexer.current_lexem() == Lexems::EndIf {
             self.lexer.advance();
         }
+        println!("[SyntaxAnalyzer] Completed skip_if_no_code");
     }
 
     fn skip_while_no_code(&mut self) {
+        println!("[SyntaxAnalyzer] Starting skip_while_no_code");
         self.lexer.advance();
         self.skip_expression();
         self.skip_block(&[Lexems::EndWhile]);
         if self.lexer.current_lexem() == Lexems::EndWhile {
             self.lexer.advance();
         }
+        println!("[SyntaxAnalyzer] Completed skip_while_no_code");
     }
 
-    fn parse_subexpression(&mut self) -> DataType {
-        let mut t;
-        if self.lexer.current_lexem() == Lexems::LParen {
-            self.lexer.advance();
-            t = self.parse_expression();
-            self.expect_lexem(Lexems::RParen);
-        } else {
-            t = self.parse_operand();
-        }
-    
-        while matches!(
-            self.lexer.current_lexem(),
-            Lexems::And | Lexems::Or | Lexems::Xor
-        ) {
-            let op = self.lexer.current_lexem();
-            self.lexer.advance();
-            let rhs = self.parse_operand();
-            if t != rhs || t != DataType::Bool {
-                self.report_error(format!("Type mismatch: expected Bool, found {:?}", rhs));
-                return DataType::None;
-            }
-            CodeGenerator::add_instruction("pop bx");
-            CodeGenerator::add_instruction("pop ax");
-            match op {
-                Lexems::And => {
-                    CodeGenerator::add_instruction("and ax, bx");
-                }
-                Lexems::Or => {
-                    CodeGenerator::add_instruction("or ax, bx");
-                }
-                Lexems::Xor => {
-                    CodeGenerator::add_instruction("xor ax, bx");
-                }
-                _ => {}
-            }
-            CodeGenerator::add_instruction("push ax");
-            t = DataType::Bool;
-        }
-        t
+    fn parse_block(&mut self) -> Statement {
+        println!("[SyntaxAnalyzer] Starting parse_block");
+        self.lexer.advance();
+        let stmts = self.parse_statements(&[Lexems::End]);
+        self.expect_lexem(Lexems::End);
+        let block = Statement::Block { stmts };
+        println!("[SyntaxAnalyzer] Completed parse_block: {:?}", block);
+        block
     }
 
-    fn parse_operand(&mut self) -> DataType {
-        match self.lexer.current_lexem() {
-            Lexems::Name => {
-                let name = self.lexer.current_name().to_string();
-                if let Some(ident) = self.name_table.find_by_name(&name) {
-                    CodeGenerator::add_instruction(&format!("mov ax, [{}]", name));
-                    CodeGenerator::add_instruction("push ax");
-                    self.lexer.advance();
-                    ident.data_type.clone()
-                } else {
-                    self.report_error(format!("Undeclared identifier '{}'", name));
-                    self.lexer.advance();
-                    DataType::None
-                }
-            }
-            Lexems::Number => {
-                let value = self.lexer.current_name();
-                if value != "0" && value != "1" {
-                    self.report_error(format!(
-                        "Invalid constant '{}', expected 0 or 1 for Boolean",
-                        value
-                    ));
-                    CodeGenerator::add_instruction(&format!("mov ax, {}", value));
-                    CodeGenerator::add_instruction("push ax");
-                    self.lexer.advance();
-                    DataType::Int
-                } else {
-                    // Для Boolean проверяем тип переменной в контексте
-                    let data_type = if self
-                        .name_table
-                        .find_by_name(&self.lexer.current_name())
-                        .map_or(false, |ident| ident.data_type == DataType::Bool)
-                    {
-                        DataType::Bool
-                    } else {
-                        DataType::Int
-                    };
-                    CodeGenerator::add_instruction(&format!("mov ax, {}", value));
-                    CodeGenerator::add_instruction("push ax");
-                    self.lexer.advance();
-                    data_type
-                }
-            }
-            _ => {
-                self.report_error("Expected identifier or constant".to_string());
-                self.lexer.advance();
-                DataType::None
-            }
-        }
-    }
-
-    fn parse_logical_expression(&mut self) -> DataType {
-        let t = self.parse_add_sub();
-        match self.lexer.current_lexem() {
-            Lexems::Equal
-            | Lexems::NotEqual
-            | Lexems::Less
-            | Lexems::LessOrEqual
-            | Lexems::Greater
-            | Lexems::GreaterOrEqual => {
-                let op = self.lexer.current_lexem();
-                self.lexer.advance();
-                let rhs = self.parse_add_sub();
-                if t != rhs && t != DataType::None && rhs != DataType::None {
-                    self.report_error(format!("Type mismatch: expected {:?}, found {:?}", t, rhs));
-                }
-                let true_label = CodeGenerator::new_label("true");
-                let done_label = CodeGenerator::new_label("done");
-                CodeGenerator::add_instruction("pop bx");
-                CodeGenerator::add_instruction("pop ax");
-                CodeGenerator::add_instruction("cmp ax, bx");
-                match op {
-                    Lexems::Equal => {
-                        CodeGenerator::add_instruction(&format!("je {}", true_label));
-                    }
-                    Lexems::NotEqual => {
-                        CodeGenerator::add_instruction(&format!("jne {}", true_label));
-                    }
-                    Lexems::Less => {
-                        CodeGenerator::add_instruction(&format!("jl {}", true_label));
-                    }
-                    Lexems::LessOrEqual => {
-                        CodeGenerator::add_instruction(&format!("jle {}", true_label));
-                    }
-                    Lexems::Greater => {
-                        CodeGenerator::add_instruction(&format!("jg {}", true_label));
-                    }
-                    Lexems::GreaterOrEqual => {
-                        CodeGenerator::add_instruction(&format!("jge {}", true_label));
-                    }
-                    _ => {}
-                }
-                CodeGenerator::add_instruction("mov ax, 0");
-                CodeGenerator::add_instruction(&format!("jmp {}", done_label));
-                CodeGenerator::add_instruction(&format!("{}:", true_label));
-                CodeGenerator::add_instruction("mov ax, 1");
-                CodeGenerator::add_instruction(&format!("{}:", done_label));
-                CodeGenerator::add_instruction("push ax");
-                DataType::Bool
-            }
-            _ => t,
-        }
-    }
-
-    fn parse_if(&mut self) {
-        self.expect_lexem(Lexems::If);
-        let expr_type = self.parse_expression();
-        if expr_type != DataType::Bool {
+    fn parse_if(&mut self) -> Statement {
+        println!("[SyntaxAnalyzer] Starting parse_if");
+        self.lexer.advance();
+        let cond = self.parse_expression();
+        if cond.typ != DataType::Bool {
             self.report_error(format!(
                 "Expected boolean expression in 'if', got {:?}",
-                expr_type
+                cond.typ
             ));
         }
-        let else_label = CodeGenerator::new_label("else");
-        let endif_label = CodeGenerator::new_label("endif");
-        CodeGenerator::add_instruction("pop ax");
-        CodeGenerator::add_instruction("cmp ax, 0");
-        CodeGenerator::add_instruction(&format!("je {}", else_label));
         self.expect_lexem(Lexems::Then);
-        self.parse_instructions(&[Lexems::Else, Lexems::ElseIf, Lexems::EndIf]);
-        CodeGenerator::add_instruction(&format!("jmp {}", endif_label));
-        CodeGenerator::add_instruction(&format!("{}:", else_label));
+        let then = self.parse_statements(&[Lexems::ElseIf, Lexems::Else, Lexems::EndIf]);
+        let mut elseifs = vec![];
         while self.lexer.current_lexem() == Lexems::ElseIf {
             self.lexer.advance();
-            let expr_type = self.parse_expression();
-            if expr_type != DataType::Bool {
+            let elseif_cond = self.parse_expression();
+            if elseif_cond.typ != DataType::Bool {
                 self.report_error(format!(
                     "Expected boolean expression in 'elseif', got {:?}",
-                    expr_type
+                    elseif_cond.typ
                 ));
             }
-            let next_else_label = CodeGenerator::new_label("else");
-            CodeGenerator::add_instruction("pop ax");
-            CodeGenerator::add_instruction("cmp ax, 0");
-            CodeGenerator::add_instruction(&format!("je {}", next_else_label));
             self.expect_lexem(Lexems::Then);
-            self.parse_instructions(&[Lexems::Else, Lexems::ElseIf, Lexems::EndIf]);
-            CodeGenerator::add_instruction(&format!("jmp {}", endif_label));
-            CodeGenerator::add_instruction(&format!("{}:", next_else_label));
+            let elseif_stmts = self.parse_statements(&[Lexems::ElseIf, Lexems::Else, Lexems::EndIf]);
+            elseifs.push((elseif_cond, elseif_stmts));
         }
-        if self.lexer.current_lexem() == Lexems::Else {
+        let els = if self.lexer.current_lexem() == Lexems::Else {
             self.lexer.advance();
-            self.parse_instructions(&[Lexems::EndIf]);
-        }
+            Some(self.parse_statements(&[Lexems::EndIf]))
+        } else {
+            None
+        };
         self.expect_lexem(Lexems::EndIf);
-        CodeGenerator::add_instruction(&format!("{}:", endif_label));
+        let stmt = Statement::If {
+            cond,
+            then,
+            elseifs,
+            els,
+        };
+        println!("[SyntaxAnalyzer] Completed parse_if: {:?}", stmt);
+        stmt
     }
 
-    fn parse_while(&mut self) {
-        self.expect_lexem(Lexems::While);
-        let start_label = CodeGenerator::new_label("while_start");
-        let end_label = CodeGenerator::new_label("while_end");
-        CodeGenerator::add_instruction(&format!("{}:", start_label));
-        let expr_type = self.parse_expression();
-        if expr_type != DataType::Bool {
+    fn parse_while(&mut self) -> Statement {
+        println!("[SyntaxAnalyzer] Starting parse_while");
+        self.lexer.advance();
+        let cond = self.parse_expression();
+        if cond.typ != DataType::Bool {
             self.report_error(format!(
                 "Expected boolean expression in 'while', got {:?}",
-                expr_type
+                cond.typ
             ));
         }
-        CodeGenerator::add_instruction("pop ax");
-        CodeGenerator::add_instruction("cmp ax, 0");
-        CodeGenerator::add_instruction(&format!("je {}", end_label));
-        self.parse_instructions(&[Lexems::EndWhile]);
-        CodeGenerator::add_instruction(&format!("jmp {}", start_label));
+        let body = self.parse_statements(&[Lexems::EndWhile]);
         self.expect_lexem(Lexems::EndWhile);
-        CodeGenerator::add_instruction(&format!("{}:", end_label));
-        self.maybe_advance();
+        let stmt = Statement::While { cond, body };
+        println!("[SyntaxAnalyzer] Completed parse_while: {:?}", stmt);
+        stmt
+    }
+
+    pub fn skip_to_end(&mut self) {
+        println!("[SyntaxAnalyzer] Starting skip_to_end");
+        while self.lexer.current_lexem() != Lexems::EOF {
+            self.lexer.advance();
+        }
+        println!("[SyntaxAnalyzer] Completed skip_to_end");
     }
 }

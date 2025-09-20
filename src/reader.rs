@@ -23,11 +23,18 @@ struct ReaderInner {
 impl ReaderInner {
     fn init_with_string(&mut self, content: &str) -> Result<(), String> {
         self.close();
+        if content.is_empty() {
+            self.current_char = None;
+            self.eof = true;
+            self.line = 1;
+            self.col = 1;
+            return Ok(());
+        }
         let chars: Vec<char> = content.chars().collect();
         self.string_content = Some(chars);
         self.string_pos = 0;
         self.line = 1;
-        self.col = 0;
+        self.col = 1; // Start at col 1 for the first character
         self.eof = false;
         self.reader = None;
         self.file_path = None;
@@ -49,17 +56,19 @@ impl ReaderInner {
 
             match ch {
                 '\r' => {
-                    self.col += 1;
+                    // Skip \r and try next character
                     return self.read_next_char();
                 }
                 '\n' => {
                     self.line += 1;
                     self.col = 1;
-                    self.current_char = Some(' ');
+                    self.current_char = None; // Don't treat newline as a character
+                    return self.read_next_char(); // Advance to next non-whitespace
                 }
                 '\t' => {
-                    self.col += 1;
-                    self.current_char = Some(' ');
+                    self.col += 4; // Treat tab as 4 spaces
+                    self.current_char = None;
+                    return self.read_next_char(); // Skip tabs
                 }
                 _ => {
                     self.col += 1;
@@ -67,7 +76,6 @@ impl ReaderInner {
                 }
             }
         } else if let Some(r) = self.reader.as_mut() {
-            // Работа с файлом
             let mut buf = [0u8; 1];
             match r.read(&mut buf)? {
                 0 => {
@@ -77,14 +85,19 @@ impl ReaderInner {
                 _ => {
                     let ch = buf[0] as char;
                     match ch {
-                        '\r' | '\t' => {
-                            self.col += 1;
+                        '\r' => {
                             return self.read_next_char();
                         }
                         '\n' => {
                             self.line += 1;
                             self.col = 1;
-                            self.current_char = Some(' ');
+                            self.current_char = None;
+                            return self.read_next_char();
+                        }
+                        '\t' => {
+                            self.col += 4;
+                            self.current_char = None;
+                            return self.read_next_char();
                         }
                         _ => {
                             self.col += 1;
@@ -107,6 +120,8 @@ impl ReaderInner {
         self.string_content = None;
         self.string_pos = 0;
         self.eof = true;
+        self.line = 1;
+        self.col = 1;
     }
 
     fn write_all(&self, path: &str, content: &str) -> io::Result<()> {
@@ -119,7 +134,6 @@ impl ReaderInner {
     }
 }
 
-/// Публичный API
 pub struct Reader;
 
 impl Reader {

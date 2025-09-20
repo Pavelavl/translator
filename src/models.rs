@@ -60,3 +60,80 @@ pub struct Identifier {
     pub data_type: DataType,
     pub value: Option<i32>,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Eq,
+    Ne,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    And,
+    Or,
+    Xor,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum UnaryOp {
+    Not,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExprKind {
+    Literal(i32),
+    Variable(String),
+    Binary {
+        op: BinOp,
+        left: Box<Expression>,
+        right: Box<Expression>,
+    },
+    Unary {
+        op: UnaryOp,
+        expr: Box<Expression>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Expression {
+    pub kind: ExprKind,
+    pub typ: DataType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Statement {
+    VarDecl {
+        typ: DataType,
+        is_const: bool,
+        names: Vec<String>,
+        init: Option<Expression>,
+    },
+    Assign {
+        name: String,
+        expr: Expression,
+    },
+    Print {
+        var: String,
+    },
+    If {
+        cond: Expression,
+        then: Vec<Statement>,
+        elseifs: Vec<(Expression, Vec<Statement>)>,
+        els: Option<Vec<Statement>>,
+    },
+    While {
+        cond: Expression,
+        body: Vec<Statement>,
+    },
+    Block {
+        stmts: Vec<Statement>,
+    },
+}
+
+pub struct Program {
+    pub(crate) stmts: Vec<Statement>,
+}
