@@ -3,6 +3,15 @@ use crate::name_table::NameTable;
 use crate::reader::Reader;
 use std::collections::HashMap;
 
+pub trait LexicalAnalyzerTrait {
+    fn init_keywords(&mut self);
+    fn advance(&mut self);
+    fn current_lexem(&self) -> Lexems;
+    fn current_name(&self) -> String;
+    fn line(&self) -> usize;
+    fn col(&self) -> usize;
+}
+
 pub struct LexicalAnalyzer {
     pub keywords: HashMap<String, Lexems>,
     pub current_lexem: Lexems,
@@ -283,6 +292,32 @@ impl LexicalAnalyzer {
             "[Lexer] line: {}, col: {}, lexem: {:?}, name: '{}'",
             self.line, self.col, self.current_lexem, self.current_name
         );
+    }
+}
+
+impl LexicalAnalyzerTrait for LexicalAnalyzer {
+    fn init_keywords(&mut self) {
+        self.init_keywords();
+    }
+
+    fn advance(&mut self) {
+        self.advance();
+    }
+
+    fn current_lexem(&self) -> Lexems {
+        self.current_lexem()
+    }
+
+    fn current_name(&self) -> String {
+        self.current_name()
+    }
+
+    fn line(&self) -> usize {
+        self.line
+    }
+
+    fn col(&self) -> usize {
+        self.col
     }
 }
 

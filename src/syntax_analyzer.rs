@@ -1,4 +1,4 @@
-use crate::lexical_analyzer::LexicalAnalyzer;
+use crate::lexical_analyzer::LexicalAnalyzerTrait;
 use crate::models::{BinOp, Category, DataType, ExprKind, Expression, Lexems, Program, Statement, UnaryOp};
 use crate::name_table::NameTable;
 
@@ -9,16 +9,16 @@ pub struct Error {
     pub message: String,
 }
 
-pub struct SyntaxAnalyzer {
-    pub lexer: LexicalAnalyzer,
+pub struct SyntaxAnalyzer<L: LexicalAnalyzerTrait> {
+    pub lexer: L,
     pub name_table: NameTable,
     pub errors: Vec<Error>,
     pub current_line: usize,
     pub instruction_count: usize,
 }
 
-impl SyntaxAnalyzer {
-    pub fn new(mut lexer: LexicalAnalyzer) -> Self {
+impl<L: LexicalAnalyzerTrait> SyntaxAnalyzer<L> {
+    pub fn new(mut lexer: L) -> Self {
         println!("[SyntaxAnalyzer] Initializing new SyntaxAnalyzer");
         lexer.init_keywords();
         let analyzer = Self {
@@ -292,8 +292,8 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_assignment(&mut self) -> Vec<Statement> {
-        println!("[SyntaxAnalyzer] Starting parse_assignment at line {}", self.lexer.line);
-        if self.instruction_count > 0 && self.current_line == self.lexer.line {
+        println!("[SyntaxAnalyzer] Starting parse_assignment at line {}", self.lexer.line());
+        if self.instruction_count > 0 && self.current_line == self.lexer.line() {
             self.report_error("Only one assignment per line allowed".to_string());
             self.lexer.advance();
             println!("[SyntaxAnalyzer] Aborted parse_assignment due to multiple assignments");
@@ -358,15 +358,15 @@ impl SyntaxAnalyzer {
     pub fn report_error(&mut self, message: String) {
         eprintln!(
             "[ERROR] Line {}, Col {}: {} -- Token: {:?}, Name: '{}'",
-            self.lexer.line,
-            self.lexer.col,
+            self.lexer.line(),
+            self.lexer.col(),
             message,
             self.lexer.current_lexem(),
             self.lexer.current_name()
         );
         self.errors.push(Error {
-            line: self.lexer.line,
-            col: self.lexer.col,
+            line: self.lexer.line(),
+            col: self.lexer.col(),
             message,
         });
     }
@@ -395,7 +395,7 @@ impl SyntaxAnalyzer {
 
     fn parse_print(&mut self) -> Vec<Statement> {
         println!("[SyntaxAnalyzer] Starting parse_print");
-        if self.instruction_count > 0 && self.current_line == self.lexer.line {
+        if self.instruction_count > 0 && self.current_line == self.lexer.line() {
             self.report_error("Only one instruction per line allowed".to_string());
             println!("[SyntaxAnalyzer] Aborted parse_print due to multiple instructions");
             return vec![];
@@ -426,7 +426,7 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_statement(&mut self) -> Vec<Statement> {
-        println!("[SyntaxAnalyzer] Starting parse_statement at line {}", self.lexer.line);
+        println!("[SyntaxAnalyzer] Starting parse_statement at line {}", self.lexer.line());
         self.maybe_advance();
         let result = match self.lexer.current_lexem() {
             Lexems::Print => {
@@ -489,8 +489,8 @@ impl SyntaxAnalyzer {
     }
 
     fn parse_variable_declarations(&mut self) -> Vec<Statement> {
-        println!("[SyntaxAnalyzer] Starting parse_variable_declarations at line {}", self.lexer.line);
-        if self.instruction_count > 0 && self.lexer.line == self.current_line {
+        println!("[SyntaxAnalyzer] Starting parse_variable_declarations at line {}", self.lexer.line());
+        if self.instruction_count > 0 && self.lexer.line() == self.current_line {
             self.report_error("Only one declaration per line allowed".to_string());
             println!("[SyntaxAnalyzer] Aborted parse_variable_declarations due to multiple declarations");
             return vec![];
@@ -627,13 +627,13 @@ impl SyntaxAnalyzer {
     pub fn parse_program(&mut self) -> Program {
         println!("[SyntaxAnalyzer] Starting parse_program");
         let mut stmts = vec![];
-        self.current_line = self.lexer.line;
+        self.current_line = self.lexer.line();
 
         // Парсим объявления переменных
         while matches!(self.lexer.current_lexem(), Lexems::Int | Lexems::Bool) {
             println!("[SyntaxAnalyzer] Parsing variable declarations");
             stmts.extend(self.parse_statement());
-            self.current_line = self.lexer.line;
+            self.current_line = self.lexer.line();
         }
 
         // Парсим основной блок программы
@@ -831,5 +831,1446 @@ impl SyntaxAnalyzer {
         let stmt = Statement::While { cond, body };
         println!("[SyntaxAnalyzer] Completed parse_while: {:?}", stmt);
         stmt
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    use super::*;
+    use crate::models::{BinOp, Category, DataType, ExprKind, Expression, Lexems, Statement, UnaryOp};
+    use mockall::mock;
+    use mockall::predicate::*;
+
+    // Mock для LexicalAnalyzer
+    mock! {
+        pub LexicalAnalyzer {
+            fn init_keywords(&mut self);
+            fn advance(&mut self);
+            fn current_lexem(&self) -> Lexems;
+            fn current_name(&self) -> String;
+            fn line(&self) -> usize;
+            fn col(&self) -> usize;
+        }
+    }
+
+    impl LexicalAnalyzerTrait for MockLexicalAnalyzer {
+        fn init_keywords(&mut self) {
+            self.init_keywords();
+        }
+
+        fn advance(&mut self) {
+            self.advance();
+        }
+
+        fn current_lexem(&self) -> Lexems {
+            self.current_lexem()
+        }
+
+        fn current_name(&self) -> String {
+            self.current_name()
+        }
+
+        fn line(&self) -> usize {
+            self.line()
+        }
+
+        fn col(&self) -> usize {
+            self.col()
+        }
+    }
+
+    // Вспомогательная функция для создания SyntaxAnalyzer с мок-лексером
+    fn setup_analyzer(tokens: Vec<(Lexems, String, usize, usize)>) -> SyntaxAnalyzer<MockLexicalAnalyzer> {
+        let mut mock = MockLexicalAnalyzer::new();
+        // Оборачиваем tokens в Arc<Mutex<Vec<_>>> для потокобезопасного разделения
+        let tokens = Arc::new(Mutex::new(tokens));
+        // Счетчик вызовов для отслеживания текущей позиции
+        let call_count = Arc::new(Mutex::new(0));
+
+        // Клонируем Arc для каждого замыкания
+        let _tokens_clone = tokens.clone();
+        let call_count_clone = call_count.clone();
+        mock.expect_advance().returning(move || {
+            let mut count = call_count_clone.lock().unwrap();
+            *count += 1;
+        });
+
+        let tokens_clone = tokens.clone();
+        let call_count_clone = call_count.clone();
+        mock.expect_current_lexem().returning(move || {
+            let tokens = tokens_clone.lock().unwrap();
+            let count = *call_count_clone.lock().unwrap();
+            tokens.get(count).map(|(lexem, _, _, _)| lexem).unwrap_or(&Lexems::EOF).clone()
+        });
+
+        let tokens_clone = tokens.clone();
+        let call_count_clone = call_count.clone();
+        mock.expect_current_name().returning(move || {
+            let tokens = tokens_clone.lock().unwrap();
+            let count = *call_count_clone.lock().unwrap();
+            tokens.get(count).map(|(_, name, _, _)| name.clone()).unwrap_or_default()
+        });
+
+        let tokens_clone = tokens.clone();
+        let call_count_clone = call_count.clone();
+        mock.expect_line().returning(move || {
+            let tokens = tokens_clone.lock().unwrap();
+            let count = *call_count_clone.lock().unwrap();
+            tokens.get(count).map(|(_, _, line, _)| *line).unwrap_or(1)
+        });
+
+        let tokens_clone = tokens.clone();
+        let call_count_clone = call_count.clone();
+        mock.expect_col().returning(move || {
+            let tokens = tokens_clone.lock().unwrap();
+            let count = *call_count_clone.lock().unwrap();
+            tokens.get(count).map(|(_, _, _, col)| *col).unwrap_or(1)
+        });
+
+        mock.expect_init_keywords().return_once(|| {});
+
+        SyntaxAnalyzer::new(mock)
+    }
+
+    #[test]
+    fn test_new_analyzer() {
+        let tokens = vec![(Lexems::EOF, String::new(), 1, 1)];
+        let analyzer = setup_analyzer(tokens);
+        assert!(analyzer.errors.is_empty());
+        assert_eq!(analyzer.current_line, 0);
+        assert_eq!(analyzer.instruction_count, 0);
+        assert!(analyzer.name_table.entries().len() == 0);
+    }
+
+    #[test]
+    fn test_can_be_bool_literal() {
+        let analyzer = setup_analyzer(vec![(Lexems::EOF, String::new(), 1, 1)]);
+        let expr = Expression {
+            kind: ExprKind::Literal(0),
+            typ: DataType::Int,
+        };
+        assert!(analyzer.can_be_bool(&expr));
+        let expr = Expression {
+            kind: ExprKind::Literal(2),
+            typ: DataType::Int,
+        };
+        assert!(!analyzer.can_be_bool(&expr));
+    }
+
+    #[test]
+    fn test_can_be_bool_variable() {
+        let mut analyzer = setup_analyzer(vec![(Lexems::EOF, String::new(), 1, 1)]);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        let expr = Expression {
+            kind: ExprKind::Variable("x".to_string()),
+            typ: DataType::Bool,
+        };
+        assert!(analyzer.can_be_bool(&expr));
+        let expr = Expression {
+            kind: ExprKind::Variable("y".to_string()),
+            typ: DataType::Int,
+        };
+        assert!(!analyzer.can_be_bool(&expr));
+    }
+
+    #[test]
+    fn test_can_be_bool_binary() {
+        let analyzer = setup_analyzer(vec![(Lexems::EOF, String::new(), 1, 1)]);
+        let expr = Expression {
+            kind: ExprKind::Binary {
+                op: BinOp::And,
+                left: Box::new(Expression {
+                    kind: ExprKind::Literal(1),
+                    typ: DataType::Bool,
+                }),
+                right: Box::new(Expression {
+                    kind: ExprKind::Literal(0),
+                    typ: DataType::Bool,
+                }),
+            },
+            typ: DataType::Bool,
+        };
+        assert!(analyzer.can_be_bool(&expr));
+        let expr = Expression {
+            kind: ExprKind::Binary {
+                op: BinOp::Add,
+                left: Box::new(Expression {
+                    kind: ExprKind::Literal(1),
+                    typ: DataType::Int,
+                }),
+                right: Box::new(Expression {
+                    kind: ExprKind::Literal(2),
+                    typ: DataType::Int,
+                }),
+            },
+            typ: DataType::Int,
+        };
+        assert!(!analyzer.can_be_bool(&expr));
+    }
+
+    #[test]
+    fn test_parse_expression_number() {
+        let tokens = vec![
+            (Lexems::Number, "42".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 3),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(42),
+                typ: DataType::Int,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_variable() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 2),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Variable("x".to_string()),
+                typ: DataType::Int,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_undeclared_variable() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 2),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(0),
+                typ: DataType::None,
+            }
+        );
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Undeclared identifier 'x'");
+    }
+
+    #[test]
+    fn test_parse_expression_binary_add() {
+        let tokens = vec![
+            (Lexems::Number, "1".to_string(), 1, 1),
+            (Lexems::Plus, "+".to_string(), 1, 3),
+            (Lexems::Number, "2".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 7),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Binary {
+                    op: BinOp::Add,
+                    left: Box::new(Expression {
+                        kind: ExprKind::Literal(1),
+                        typ: DataType::Int,
+                    }),
+                    right: Box::new(Expression {
+                        kind: ExprKind::Literal(2),
+                        typ: DataType::Int,
+                    }),
+                },
+                typ: DataType::Int,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_type_mismatch_add() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Plus, "+".to_string(), 1, 3),
+            (Lexems::Name, "y".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 7),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        analyzer.name_table.add_or_update("y".to_string(), Category::Var, DataType::Bool, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(expr.typ, DataType::None);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Type mismatch in add/sub: expected Int, found Bool"
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_logical_and() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::And, "and".to_string(), 1, 3),
+            (Lexems::Name, "y".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        analyzer.name_table.add_or_update("y".to_string(), Category::Var, DataType::Bool, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Binary {
+                    op: BinOp::And,
+                    left: Box::new(Expression {
+                        kind: ExprKind::Variable("x".to_string()),
+                        typ: DataType::Bool,
+                    }),
+                    right: Box::new(Expression {
+                        kind: ExprKind::Variable("y".to_string()),
+                        typ: DataType::Bool,
+                    }),
+                },
+                typ: DataType::Bool,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_logical_type_mismatch() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::And, "and".to_string(), 1, 3),
+            (Lexems::Name, "y".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        analyzer.name_table.add_or_update("y".to_string(), Category::Var, DataType::Bool, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(expr.typ, DataType::Bool);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Type mismatch: expected Bool operands for logical operator"
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_unary_not() {
+        let tokens = vec![
+            (Lexems::Not, ".NOT.".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(Expression {
+                        kind: ExprKind::Variable("x".to_string()),
+                        typ: DataType::Bool,
+                    }),
+                },
+                typ: DataType::Bool,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_unary_not_type_mismatch() {
+        let tokens = vec![
+            (Lexems::Not, ".NOT.".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let expr = analyzer.parse_expression();
+        assert_eq!(expr.typ, DataType::None);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected Bool after .NOT., found Int"
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_parens() {
+        let tokens = vec![
+            (Lexems::LParen, "(".to_string(), 1, 1),
+            (Lexems::Number, "42".to_string(), 1, 2),
+            (Lexems::RParen, ")".to_string(), 1, 4),
+            (Lexems::EOF, String::new(), 1, 5),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(42),
+                typ: DataType::Int,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_missing_rparen() {
+        let tokens = vec![
+            (Lexems::LParen, "(".to_string(), 1, 1),
+            (Lexems::Number, "42".to_string(), 1, 2),
+            (Lexems::EOF, String::new(), 1, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(42),
+                typ: DataType::Int,
+            }
+        );
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected RParen, found EOF ('')"
+        );
+    }
+
+    #[test]
+    fn test_parse_expression_begin_end() {
+        let tokens = vec![
+            (Lexems::Begin, "Begin".to_string(), 1, 1),
+            (Lexems::Number, "42".to_string(), 1, 7),
+            (Lexems::End, "End".to_string(), 1, 9),
+            (Lexems::EOF, String::new(), 1, 12),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(42),
+                typ: DataType::Int,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_expression_unexpected_token() {
+        let tokens = vec![
+            (Lexems::Semi, ";".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 2),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let expr = analyzer.parse_expression();
+        assert_eq!(
+            expr,
+            Expression {
+                kind: ExprKind::Literal(0),
+                typ: DataType::None,
+            }
+        );
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Unexpected token in expression");
+    }
+
+    #[test]
+    fn test_parse_assignment_valid() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "42".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(
+            stmts,
+            vec![Statement::Assign {
+                name: "x".to_string(),
+                expr: Expression {
+                    kind: ExprKind::Literal(42),
+                    typ: DataType::Int,
+                },
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_assignment_undeclared_variable() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "42".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Undeclared identifier 'x'");
+    }
+
+    #[test]
+    fn test_parse_assignment_missing_assign() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Number, "42".to_string(), 1, 3),
+            (Lexems::Semi, ";".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected '=' or ':=' after identifier"
+        );
+    }
+
+    #[test]
+    fn test_parse_assignment_type_mismatch() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Name, "y".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        analyzer.name_table.add_or_update("y".to_string(), Category::Var, DataType::Bool, None);
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Type mismatch: variable 'x' expected Int, got Bool"
+        );
+    }
+
+    #[test]
+    fn test_parse_assignment_bool_invalid() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "2".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Type mismatch: variable 'x' expected Bool, got invalid value for Bool"
+        );
+    }
+
+    #[test]
+    fn test_parse_assignment_multiple_per_line() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "42".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        analyzer.instruction_count = 1;
+        analyzer.current_line = 1;
+        let stmts = analyzer.parse_assignment();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Only one assignment per line allowed"
+        );
+    }
+
+    #[test]
+    fn test_report_error() {
+        let tokens = vec![(Lexems::EOF, String::new(), 1, 1)];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.report_error("Test error".to_string());
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Test error");
+        assert_eq!(analyzer.errors[0].line, 1);
+        assert_eq!(analyzer.errors[0].col, 1);
+    }
+
+    #[test]
+    fn test_expect_lexem_success() {
+        let tokens = vec![
+            (Lexems::Semi, ";".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 2),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.expect_lexem(Lexems::Semi);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_expect_lexem_failure() {
+        let tokens = vec![
+            (Lexems::Number, "42".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 3),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.expect_lexem(Lexems::Semi);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected Semi, found Number ('42')"
+        );
+    }
+
+    #[test]
+    fn test_maybe_advance() {
+        let tokens = vec![
+            (Lexems::NewLine, "\n".to_string(), 1, 1),
+            (Lexems::Semi, ";".to_string(), 2, 1),
+            (Lexems::Number, "42".to_string(), 2, 2),
+            (Lexems::EOF, String::new(), 2, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.maybe_advance();
+        assert_eq!(analyzer.lexer.current_lexem(), Lexems::Number);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_print_valid() {
+        let tokens = vec![
+            (Lexems::Print, "print".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_print();
+        assert_eq!(
+            stmts,
+            vec![Statement::Print {
+                var: "x".to_string()
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_print_undeclared_variable() {
+        let tokens = vec![
+            (Lexems::Print, "print".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_print();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Undeclared identifier 'x'");
+    }
+
+    #[test]
+    fn test_parse_print_missing_identifier() {
+        let tokens = vec![
+            (Lexems::Print, "print".to_string(), 1, 1),
+            (Lexems::Number, "42".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_print();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected identifier after 'print'"
+        );
+    }
+
+    #[test]
+    fn test_parse_print_multiple_per_line() {
+        let tokens = vec![
+            (Lexems::Print, "print".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        analyzer.instruction_count = 1;
+        analyzer.current_line = 1;
+        let stmts = analyzer.parse_print();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Only one instruction per line allowed"
+        );
+    }
+
+    #[test]
+    fn test_parse_statement_print() {
+        let tokens = vec![
+            (Lexems::Print, "print".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::Print {
+                var: "x".to_string()
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_assignment() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "42".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::EOF, String::new(), 1, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::Assign {
+                name: "x".to_string(),
+                expr: Expression {
+                    kind: ExprKind::Literal(42),
+                    typ: DataType::Int,
+                },
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_variable_declaration() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 8),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::VarDecl {
+                typ: DataType::Int,
+                is_const: false,
+                names: vec!["x".to_string()],
+                init: None,
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_block() {
+        let tokens = vec![
+            (Lexems::Begin, "Begin".to_string(), 1, 1),
+            (Lexems::End, "End".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 10),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::Block { stmts: vec![] }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_if() {
+        let tokens = vec![
+            (Lexems::If, "if".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 4),
+            (Lexems::Then, "then".to_string(), 1, 6),
+            (Lexems::EndIf, "endif".to_string(), 1, 11),
+            (Lexems::EOF, String::new(), 1, 16),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::If {
+                cond: Expression {
+                    kind: ExprKind::Variable("x".to_string()),
+                    typ: DataType::Bool,
+                },
+                then: vec![],
+                elseifs: vec![],
+                els: None,
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_while() {
+        let tokens = vec![
+            (Lexems::While, "while".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EndWhile, "endwhile".to_string(), 1, 9),
+            (Lexems::EOF, String::new(), 1, 17),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(
+            stmts,
+            vec![Statement::While {
+                cond: Expression {
+                    kind: ExprKind::Variable("x".to_string()),
+                    typ: DataType::Bool,
+                },
+                body: vec![],
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_end() {
+        let tokens = vec![
+            (Lexems::End, "End".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(stmts, vec![]);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_eof() {
+        let tokens = vec![(Lexems::EOF, String::new(), 1, 1)];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(stmts, vec![]);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statement_unexpected_token() {
+        let tokens = vec![
+            (Lexems::Plus, "+".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 2),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statement();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Unexpected token in instruction: Plus ('+')"
+        );
+    }
+
+    #[test]
+    fn test_parse_statements_empty() {
+        let tokens = vec![
+            (Lexems::End, "End".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_statements(&[Lexems::End]);
+        assert_eq!(stmts, vec![]);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_statements_with_statement() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Assign, ":=".to_string(), 1, 3),
+            (Lexems::Number, "42".to_string(), 1, 6),
+            (Lexems::Semi, ";".to_string(), 1, 8),
+            (Lexems::End, "End".to_string(), 1, 9),
+            (Lexems::EOF, String::new(), 1, 12),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmts = analyzer.parse_statements(&[Lexems::End]);
+        assert_eq!(
+            stmts,
+            vec![Statement::Assign {
+                name: "x".to_string(),
+                expr: Expression {
+                    kind: ExprKind::Literal(42),
+                    typ: DataType::Int,
+                },
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_single() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 8),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(
+            stmts,
+            vec![Statement::VarDecl {
+                typ: DataType::Int,
+                is_const: false,
+                names: vec!["x".to_string()],
+                init: None,
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+        assert!(analyzer.name_table.find_by_name("x").is_some());
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_multiple() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Comma, ",".to_string(), 1, 7),
+            (Lexems::Name, "y".to_string(), 1, 9),
+            (Lexems::Semi, ";".to_string(), 1, 11),
+            (Lexems::EOF, String::new(), 1, 12),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(
+            stmts,
+            vec![Statement::VarDecl {
+                typ: DataType::Int,
+                is_const: false,
+                names: vec!["x".to_string(), "y".to_string()],
+                init: None,
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+        assert!(analyzer.name_table.find_by_name("x").is_some());
+        assert!(analyzer.name_table.find_by_name("y").is_some());
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_const() {
+        let tokens = vec![
+            (Lexems::Int, "int_const".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 11),
+            (Lexems::Assign, ":=".to_string(), 1, 13),
+            (Lexems::Number, "42".to_string(), 1, 16),
+            (Lexems::Semi, ";".to_string(), 1, 18),
+            (Lexems::EOF, String::new(), 1, 19),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(
+            stmts,
+            vec![Statement::VarDecl {
+                typ: DataType::Int,
+                is_const: true,
+                names: vec!["x".to_string()],
+                init: Some(Expression {
+                    kind: ExprKind::Literal(42),
+                    typ: DataType::Int,
+                }),
+            }]
+        );
+        assert!(analyzer.errors.is_empty());
+        let ident = analyzer.name_table.find_by_name("x").unwrap();
+        assert_eq!(ident.category, Category::Const);
+        assert_eq!(ident.value, Some(42));
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_invalid_type() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Name, "y".to_string(), 1, 3),
+            (Lexems::Semi, ";".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Expected 'int' or 'bool'");
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_missing_name() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Semi, ";".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Expected variable name");
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_multiple_init_error() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Comma, ",".to_string(), 1, 7),
+            (Lexems::Name, "y".to_string(), 1, 9),
+            (Lexems::Assign, ":=".to_string(), 1, 11),
+            (Lexems::Number, "42".to_string(), 1, 14),
+            (Lexems::Semi, ";".to_string(), 1, 16),
+            (Lexems::EOF, String::new(), 1, 17),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Multiple variables cannot have initializer"
+        );
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_invalid_bool_const() {
+        let tokens = vec![
+            (Lexems::Bool, "bool_const".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 12),
+            (Lexems::Assign, ":=".to_string(), 1, 14),
+            (Lexems::Number, "2".to_string(), 1, 17),
+            (Lexems::Semi, ";".to_string(), 1, 19),
+            (Lexems::EOF, String::new(), 1, 20),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Invalid constant '2', expected 0 or 1 for Boolean"
+        );
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_non_numeric_const() {
+        let tokens = vec![
+            (Lexems::Bool, "bool_const".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 12),
+            (Lexems::Assign, ":=".to_string(), 1, 14),
+            (Lexems::Name, "y".to_string(), 1, 17),
+            (Lexems::Semi, ";".to_string(), 1, 19),
+            (Lexems::EOF, String::new(), 1, 20),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Constant must be initialized with a number literal"
+        );
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_multiple_per_line() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 8),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.instruction_count = 1;
+        analyzer.current_line = 1;
+        let stmts = analyzer.parse_variable_declarations();
+        assert_eq!(stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Only one declaration per line allowed"
+        );
+    }
+
+    #[test]
+    fn test_parse_program_empty() {
+        let tokens = vec![(Lexems::EOF, String::new(), 1, 1)];
+        let mut analyzer = setup_analyzer(tokens);
+        let program = analyzer.parse_program();
+        assert_eq!(program.stmts, vec![]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected 'Begin' for computations"
+        );
+    }
+
+    #[test]
+    fn test_parse_program_full() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::Begin, "Begin".to_string(), 2, 1),
+            (Lexems::Name, "x".to_string(), 3, 1),
+            (Lexems::Assign, ":=".to_string(), 3, 3),
+            (Lexems::Number, "42".to_string(), 3, 6),
+            (Lexems::Semi, ";".to_string(), 3, 8),
+            (Lexems::End, "End".to_string(), 4, 1),
+            (Lexems::Print, "print".to_string(), 5, 1),
+            (Lexems::Name, "x".to_string(), 5, 7),
+            (Lexems::EOF, String::new(), 5, 9),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let program = analyzer.parse_program();
+        assert_eq!(
+            program.stmts,
+            vec![
+                Statement::VarDecl {
+                    typ: DataType::Int,
+                    is_const: false,
+                    names: vec!["x".to_string()],
+                    init: None,
+                },
+                Statement::Block {
+                    stmts: vec![Statement::Assign {
+                        name: "x".to_string(),
+                        expr: Expression {
+                            kind: ExprKind::Literal(42),
+                            typ: DataType::Int,
+                        },
+                    }],
+                },
+                Statement::Print {
+                    var: "x".to_string(),
+                },
+            ]
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_program_unexpected_tokens_after_end() {
+        let tokens = vec![
+            (Lexems::Begin, "Begin".to_string(), 1, 1),
+            (Lexems::End, "End".to_string(), 2, 1),
+            (Lexems::Number, "42".to_string(), 3, 1),
+            (Lexems::EOF, String::new(), 3, 3),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let program = analyzer.parse_program();
+        assert_eq!(program.stmts, vec![Statement::Block { stmts: vec![] }]);
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Unexpected tokens after program"
+        );
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_no_code_single() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 8),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.parse_variable_declarations_no_code();
+        assert!(analyzer.errors.is_empty());
+        assert!(analyzer.name_table.find_by_name("x").is_some());
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_no_code_const() {
+        let tokens = vec![
+            (Lexems::Int, "int_const".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 11),
+            (Lexems::Assign, ":=".to_string(), 1, 13),
+            (Lexems::Number, "42".to_string(), 1, 16),
+            (Lexems::Semi, ";".to_string(), 1, 18),
+            (Lexems::EOF, String::new(), 1, 19),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.parse_variable_declarations_no_code();
+        assert!(analyzer.errors.is_empty());
+        let ident = analyzer.name_table.find_by_name("x").unwrap();
+        assert_eq!(ident.category, Category::Const);
+        assert_eq!(ident.value, Some(42));
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_no_code_invalid_type() {
+        let tokens = vec![
+            (Lexems::Name, "x".to_string(), 1, 1),
+            (Lexems::Semi, ";".to_string(), 1, 3),
+            (Lexems::EOF, String::new(), 1, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.parse_variable_declarations_no_code();
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Expected 'int' or 'bool'");
+    }
+
+    #[test]
+    fn test_parse_variable_declarations_no_code_unexpected_assign() {
+        let tokens = vec![
+            (Lexems::Int, "int".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 5),
+            (Lexems::Colon, ":".to_string(), 1, 7),
+            (Lexems::Assign, ":=".to_string(), 1, 9),
+            (Lexems::Number, "42".to_string(), 1, 12),
+            (Lexems::Semi, ";".to_string(), 1, 14),
+            (Lexems::EOF, String::new(), 1, 15),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.parse_variable_declarations_no_code();
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Unexpected ':=' after ':' in declaration"
+        );
+    }
+
+    #[test]
+    fn test_skip_expression() {
+        let tokens = vec![
+            (Lexems::Number, "42".to_string(), 1, 1),
+            (Lexems::Plus, "+".to_string(), 1, 3),
+            (Lexems::Number, "10".to_string(), 1, 5),
+            (Lexems::Semi, ";".to_string(), 1, 7),
+            (Lexems::EOF, String::new(), 1, 8),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.skip_expression();
+        assert_eq!(analyzer.lexer.current_lexem(), Lexems::Semi);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_skip_expression_until_endwhile() {
+        let tokens = vec![
+            (Lexems::Number, "42".to_string(), 1, 1),
+            (Lexems::Plus, "+".to_string(), 1, 3),
+            (Lexems::EndWhile, "endwhile".to_string(), 1, 5),
+            (Lexems::EOF, String::new(), 1, 13),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.skip_expression();
+        assert_eq!(analyzer.lexer.current_lexem(), Lexems::EndWhile);
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_block() {
+        let tokens = vec![
+            (Lexems::Begin, "Begin".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 2, 1),
+            (Lexems::Assign, ":=".to_string(), 2, 3),
+            (Lexems::Number, "42".to_string(), 2, 6),
+            (Lexems::Semi, ";".to_string(), 2, 8),
+            (Lexems::End, "End".to_string(), 3, 1),
+            (Lexems::EOF, String::new(), 3, 4),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmt = analyzer.parse_block();
+        assert_eq!(
+            stmt,
+            Statement::Block {
+                stmts: vec![Statement::Assign {
+                    name: "x".to_string(),
+                    expr: Expression {
+                        kind: ExprKind::Literal(42),
+                        typ: DataType::Int,
+                    },
+                }],
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_block_missing_end() {
+        let tokens = vec![
+            (Lexems::Begin, "Begin".to_string(), 1, 1),
+            (Lexems::EOF, String::new(), 1, 7),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        let stmt = analyzer.parse_block();
+        assert_eq!(stmt, Statement::Block { stmts: vec![] });
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(analyzer.errors[0].message, "Expected End, found EOF ('')");
+    }
+
+    #[test]
+    fn test_parse_if_with_else() {
+        let tokens = vec![
+            (Lexems::If, "if".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 4),
+            (Lexems::Then, "then".to_string(), 1, 6),
+            (Lexems::Name, "x".to_string(), 2, 1),
+            (Lexems::Assign, ":=".to_string(), 2, 3),
+            (Lexems::Number, "42".to_string(), 2, 6),
+            (Lexems::Semi, ";".to_string(), 2, 8),
+            (Lexems::Else, "else".to_string(), 3, 1),
+            (Lexems::Name, "x".to_string(), 4, 1),
+            (Lexems::Assign, ":=".to_string(), 4, 3),
+            (Lexems::Number, "0".to_string(), 4, 6),
+            (Lexems::Semi, ";".to_string(), 4, 8),
+            (Lexems::EndIf, "endif".to_string(), 5, 1),
+            (Lexems::EOF, String::new(), 5, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let stmt = analyzer.parse_if();
+        assert_eq!(
+            stmt,
+            Statement::If {
+                cond: Expression {
+                    kind: ExprKind::Variable("x".to_string()),
+                    typ: DataType::Int,
+                },
+                then: vec![Statement::Assign {
+                    name: "x".to_string(),
+                    expr: Expression {
+                        kind: ExprKind::Literal(42),
+                        typ: DataType::Int,
+                    },
+                }],
+                elseifs: vec![],
+                els: Some(vec![Statement::Assign {
+                    name: "x".to_string(),
+                    expr: Expression {
+                        kind: ExprKind::Literal(0),
+                        typ: DataType::Int,
+                    },
+                }]),
+            }
+        );
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected boolean expression in 'if', got Int"
+        );
+    }
+
+    #[test]
+    fn test_parse_if_with_elseif() {
+        let tokens = vec![
+            (Lexems::If, "if".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 4),
+            (Lexems::Then, "then".to_string(), 1, 6),
+            (Lexems::ElseIf, "elseif".to_string(), 2, 1),
+            (Lexems::Name, "y".to_string(), 2, 8),
+            (Lexems::Then, "then".to_string(), 2, 10),
+            (Lexems::EndIf, "endif".to_string(), 3, 1),
+            (Lexems::EOF, String::new(), 3, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Bool, None);
+        analyzer.name_table.add_or_update("y".to_string(), Category::Var, DataType::Bool, None);
+        let stmt = analyzer.parse_if();
+        assert_eq!(
+            stmt,
+            Statement::If {
+                cond: Expression {
+                    kind: ExprKind::Variable("x".to_string()),
+                    typ: DataType::Bool,
+                },
+                then: vec![],
+                elseifs: vec![(
+                    Expression {
+                        kind: ExprKind::Variable("y".to_string()),
+                        typ: DataType::Bool,
+                    },
+                    vec![]
+                )],
+                els: None,
+            }
+        );
+        assert!(analyzer.errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_if_invalid_condition() {
+        let tokens = vec![
+            (Lexems::If, "if".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 4),
+            (Lexems::Then, "then".to_string(), 1, 6),
+            (Lexems::EndIf, "endif".to_string(), 2, 1),
+            (Lexems::EOF, String::new(), 2, 6),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let _stmt = analyzer.parse_if();
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected boolean expression in 'if', got Int"
+        );
+    }
+
+    #[test]
+    fn test_parse_while_invalid_condition() {
+        let tokens = vec![
+            (Lexems::While, "while".to_string(), 1, 1),
+            (Lexems::Name, "x".to_string(), 1, 7),
+            (Lexems::EndWhile, "endwhile".to_string(), 1, 9),
+            (Lexems::EOF, String::new(), 1, 17),
+        ];
+        let mut analyzer = setup_analyzer(tokens);
+        analyzer.name_table.add_or_update("x".to_string(), Category::Var, DataType::Int, None);
+        let _stmt = analyzer.parse_while();
+        assert_eq!(analyzer.errors.len(), 1);
+        assert_eq!(
+            analyzer.errors[0].message,
+            "Expected boolean expression in 'while', got Int"
+        );
     }
 }

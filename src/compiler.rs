@@ -1,13 +1,14 @@
 use crate::code_generator::CodeGenerator;
+use crate::lexical_analyzer::LexicalAnalyzer;
 use crate::models::Lexems;
 use crate::syntax_analyzer::{Error, SyntaxAnalyzer};
 
 pub struct Compiler {
-    pub analyzer: SyntaxAnalyzer,
+    pub analyzer: SyntaxAnalyzer<LexicalAnalyzer>,
 }
 
 impl Compiler {
-    pub fn new(analyzer: SyntaxAnalyzer) -> Self {
+    pub fn new(analyzer: SyntaxAnalyzer<LexicalAnalyzer>) -> Self {
         println!("[Compiler] Initializing new Compiler");
         Self { analyzer }
     }
