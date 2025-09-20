@@ -453,6 +453,10 @@ impl SyntaxAnalyzer {
                 println!("[SyntaxAnalyzer] Parsing while statement");
                 vec![self.parse_while()]
             }
+            Lexems::End => {
+                println!("[SyntaxAnalyzer] Encountered End token, stopping statement parsing");
+                vec![] // Просто завершаем парсинг оператора, не добавляя его
+            }
             Lexems::EOF => {
                 println!("[SyntaxAnalyzer] Reached EOF");
                 vec![]
@@ -625,12 +629,14 @@ impl SyntaxAnalyzer {
         let mut stmts = vec![];
         self.current_line = self.lexer.line;
 
+        // Парсим объявления переменных
         while matches!(self.lexer.current_lexem(), Lexems::Int | Lexems::Bool) {
             println!("[SyntaxAnalyzer] Parsing variable declarations");
             stmts.extend(self.parse_statement());
             self.current_line = self.lexer.line;
         }
 
+        // Парсим основной блок программы
         if self.lexer.current_lexem() == Lexems::Begin {
             println!("[SyntaxAnalyzer] Parsing computation block");
             stmts.extend(self.parse_statement());
@@ -639,18 +645,15 @@ impl SyntaxAnalyzer {
             println!("[SyntaxAnalyzer] Missing 'Begin' for computation block");
         }
 
+        // Парсим необязательные операторы print
         self.maybe_advance();
-
-        if self.lexer.current_lexem() == Lexems::Print {
+        while self.lexer.current_lexem() == Lexems::Print {
             println!("[SyntaxAnalyzer] Parsing print statement");
             stmts.extend(self.parse_statement());
-        } else {
-            self.report_error("Expected 'print' statement".to_string());
-            println!("[SyntaxAnalyzer] Missing 'print' statement");
+            self.maybe_advance();
         }
 
-        self.maybe_advance();
-
+        // Проверяем, что после программы нет лишних токенов
         if self.lexer.current_lexem() != Lexems::EOF {
             self.report_error("Unexpected tokens after program".to_string());
             println!("[SyntaxAnalyzer] Found unexpected tokens after program");

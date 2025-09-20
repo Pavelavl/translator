@@ -1,4 +1,4 @@
-use crate::models::{Category, Lexems};
+use crate::models::{Category, Lexems, DataType};
 use crate::name_table::NameTable;
 use crate::reader::Reader;
 use std::collections::HashMap;
@@ -10,10 +10,11 @@ pub struct LexicalAnalyzer {
     pub name_table: NameTable,
     pub line: usize,
     pub col: usize,
+    pub reader: Reader,
 }
 
 impl LexicalAnalyzer {
-    pub fn new() -> Self {
+    pub fn new(reader: Reader) -> Self {
         println!("[LexicalAnalyzer] Initializing new LexicalAnalyzer");
         let mut lexer = Self {
             keywords: HashMap::new(),
@@ -22,6 +23,7 @@ impl LexicalAnalyzer {
             name_table: NameTable::new(),
             line: 1,
             col: 1,
+            reader,
         };
         lexer.init_keywords();
         println!("[LexicalAnalyzer] Initialization complete");
@@ -60,30 +62,30 @@ impl LexicalAnalyzer {
 
     fn parse_next_lexem(&mut self) {
         println!("[LexicalAnalyzer] Starting parse_next_lexem at line {}, col {}", self.line, self.col);
-        while let Some(ch) = Reader::current_char() {
+        while let Some(ch) = self.reader.current_char() {
             if ch.is_whitespace() {
                 if ch == '\n' {
                     println!("[LexicalAnalyzer] Found newline");
                     self.current_lexem = Lexems::NewLine;
                     self.current_name.clear();
-                    self.line = Reader::line();
-                    self.col = Reader::col();
-                    let _ = Reader::read_next_char();
+                    self.line += 1; // Increment line for newline
+                    self.col = 1;   // Reset column for new line
+                    let _ = self.reader.read_next_char();
                     println!("[LexicalAnalyzer] Processed newline, new position: line {}, col {}", self.line, self.col);
                     return;
                 }
                 println!("[LexicalAnalyzer] Skipping whitespace '{}'", ch);
-                let _ = Reader::read_next_char();
+                let _ = self.reader.read_next_char();
             } else {
                 break;
             }
         }
 
-        self.line = Reader::line();
-        self.col = Reader::col();
+        self.line = self.reader.line();
+        self.col = self.reader.col();
         println!("[LexicalAnalyzer] Updated position: line {}, col {}", self.line, self.col);
 
-        if Reader::is_eof() {
+        if self.reader.is_eof() {
             println!("[LexicalAnalyzer] Reached EOF");
             self.current_lexem = Lexems::EOF;
             self.current_name.clear();
@@ -91,7 +93,7 @@ impl LexicalAnalyzer {
         }
 
         self.current_name.clear();
-        let ch = match Reader::current_char() {
+        let ch = match self.reader.current_char() {
             Some(c) => {
                 println!("[LexicalAnalyzer] Processing character '{}'", c);
                 c
@@ -108,11 +110,11 @@ impl LexicalAnalyzer {
             println!("[LexicalAnalyzer] Found dot, checking for composite token");
             let mut temp_name = String::new();
             temp_name.push(ch);
-            let _ = Reader::read_next_char();
-            while let Some(next_ch) = Reader::current_char() {
+            let _ = self.reader.read_next_char();
+            while let Some(next_ch) = self.reader.current_char() {
                 if next_ch.is_alphabetic() || next_ch == '.' {
                     temp_name.push(next_ch);
-                    let _ = Reader::read_next_char();
+                    let _ = self.reader.read_next_char();
                 } else {
                     break;
                 }
@@ -149,12 +151,12 @@ impl LexicalAnalyzer {
                 '/' => self.consume_simple(Lexems::Div, '/'),
                 ';' => self.consume_simple(Lexems::Semi, ';'),
                 ':' => {
-                    let _ = Reader::read_next_char();
-                    if Reader::current_char() == Some('=') {
+                    let _ = self.reader.read_next_char();
+                    if self.reader.current_char() == Some('=') {
                         println!("[LexicalAnalyzer] Found assignment operator ':='");
                         self.current_lexem = Lexems::Assign;
                         self.current_name = ":=".to_string();
-                        let _ = Reader::read_next_char();
+                        let _ = self.reader.read_next_char();
                     } else {
                         println!("[LexicalAnalyzer] Found colon ':'");
                         self.current_lexem = Lexems::Colon;
@@ -162,12 +164,12 @@ impl LexicalAnalyzer {
                     }
                 }
                 '<' => {
-                    let _ = Reader::read_next_char();
-                    if Reader::current_char() == Some('=') {
+                    let _ = self.reader.read_next_char();
+                    if self.reader.current_char() == Some('=') {
                         println!("[LexicalAnalyzer] Found less or equal '<='");
                         self.current_lexem = Lexems::LessOrEqual;
                         self.current_name = "<=".to_string();
-                        let _ = Reader::read_next_char();
+                        let _ = self.reader.read_next_char();
                     } else {
                         println!("[LexicalAnalyzer] Found less '<'");
                         self.current_lexem = Lexems::Less;
@@ -176,12 +178,12 @@ impl LexicalAnalyzer {
                 }
                 '=' => self.consume_simple(Lexems::Equal, '='),
                 '>' => {
-                    let _ = Reader::read_next_char();
-                    if Reader::current_char() == Some('=') {
+                    let _ = self.reader.read_next_char();
+                    if self.reader.current_char() == Some('=') {
                         println!("[LexicalAnalyzer] Found greater or equal '>='");
                         self.current_lexem = Lexems::GreaterOrEqual;
                         self.current_name = ">=".to_string();
-                        let _ = Reader::read_next_char();
+                        let _ = self.reader.read_next_char();
                     } else {
                         println!("[LexicalAnalyzer] Found greater '>'");
                         self.current_lexem = Lexems::Greater;
@@ -189,12 +191,12 @@ impl LexicalAnalyzer {
                     }
                 }
                 '!' => {
-                    let _ = Reader::read_next_char();
-                    if Reader::current_char() == Some('=') {
+                    let _ = self.reader.read_next_char();
+                    if self.reader.current_char() == Some('=') {
                         println!("[LexicalAnalyzer] Found not equal '!='");
                         self.current_lexem = Lexems::NotEqual;
                         self.current_name = "!=".to_string();
-                        let _ = Reader::read_next_char();
+                        let _ = self.reader.read_next_char();
                     } else {
                         println!("[LexicalAnalyzer] Invalid operator '!'");
                         self.current_lexem = Lexems::Error;
@@ -208,7 +210,7 @@ impl LexicalAnalyzer {
                     println!("[LexicalAnalyzer] Unknown character '{}', marking as error", ch);
                     self.current_lexem = Lexems::Error;
                     self.current_name = ch.to_string();
-                    let _ = Reader::read_next_char();
+                    let _ = self.reader.read_next_char();
                 }
             }
         }
@@ -219,16 +221,16 @@ impl LexicalAnalyzer {
         println!("[LexicalAnalyzer] Consuming simple token: lexem={:?}, char='{}'", lex, ch);
         self.current_lexem = lex;
         self.current_name = ch.to_string();
-        let _ = Reader::read_next_char();
+        let _ = self.reader.read_next_char();
     }
 
     fn parse_identifier(&mut self) {
         println!("[LexicalAnalyzer] Starting parse_identifier");
         self.current_name.clear();
-        while let Some(ch) = Reader::current_char() {
+        while let Some(ch) = self.reader.current_char() {
             if ch.is_alphabetic() {
                 self.current_name.push(ch);
-                let _ = Reader::read_next_char();
+                let _ = self.reader.read_next_char();
             } else {
                 break;
             }
@@ -240,7 +242,7 @@ impl LexicalAnalyzer {
                 let _ = self.name_table.add(
                     self.current_name.clone(),
                     Category::Var,
-                    crate::models::DataType::None,
+                    DataType::None,
                 );
                 println!("[LexicalAnalyzer] Added new identifier '{}' to name table", self.current_name);
             } else {
@@ -252,10 +254,10 @@ impl LexicalAnalyzer {
     fn parse_number(&mut self) {
         println!("[LexicalAnalyzer] Starting parse_number");
         self.current_name.clear();
-        while let Some(ch) = Reader::current_char() {
+        while let Some(ch) = self.reader.current_char() {
             if ch.is_digit(10) {
                 self.current_name.push(ch);
-                let _ = Reader::read_next_char();
+                let _ = self.reader.read_next_char();
             } else {
                 break;
             }
@@ -281,5 +283,292 @@ impl LexicalAnalyzer {
             "[Lexer] line: {}, col: {}, lexem: {:?}, name: '{}'",
             self.line, self.col, self.current_lexem, self.current_name
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::DataType;
+    use crate::reader::Reader;
+
+    // Helper function to setup lexer with input
+    fn setup_lexer(input: &str) -> LexicalAnalyzer {
+        let mut reader = Reader::new();
+        if reader.init_with_string(input).is_err() {
+            println!("[setup_lexer] Failed to initialize Reader with input: {}", input);
+        }
+        let mut lexer = LexicalAnalyzer::new(reader);
+        lexer.line = 1;
+        lexer.col = 1; // Force reset to 1 for tests
+        lexer
+    }
+
+    #[test]
+    fn test_new() {
+        let lexer = setup_lexer("");
+        assert_eq!(lexer.current_lexem, Lexems::None, "Current lexem should be None");
+        assert_eq!(lexer.current_name, "", "Current name should be empty");
+        assert_eq!(lexer.line, 1, "Line should be 1");
+        assert_eq!(lexer.col, 1, "Column should be 1");
+        assert_eq!(lexer.name_table.entries().len(), 0, "Name table should be empty");
+        assert_eq!(lexer.keywords.len(), 17, "Keywords should contain 17 entries");
+    }
+
+    #[test]
+    fn test_init_keywords() {
+        let mut lexer = setup_lexer("");
+        lexer.keywords.clear();
+        lexer.init_keywords();
+        assert_eq!(lexer.keywords.len(), 17, "Should initialize 17 keywords");
+        assert_eq!(lexer.keywords.get("int"), Some(&Lexems::Int));
+        assert_eq!(lexer.keywords.get(".not."), Some(&Lexems::Not));
+        assert_eq!(lexer.keywords.get("boolean"), Some(&Lexems::Bool));
+        assert_eq!(lexer.keywords.get("if"), Some(&Lexems::If));
+    }
+
+    #[test]
+    fn test_get_keyword_known() {
+        let lexer = setup_lexer("");
+        assert_eq!(lexer.get_keyword("int"), Lexems::Int, "Should recognize 'int' keyword");
+        assert_eq!(lexer.get_keyword(".not."), Lexems::Not, "Should recognize '.not.' keyword");
+        assert_eq!(lexer.get_keyword("IF"), Lexems::If, "Should recognize 'IF' case-insensitive");
+    }
+
+    #[test]
+    fn test_get_keyword_unknown() {
+        let lexer = setup_lexer("");
+        assert_eq!(lexer.get_keyword("xyz"), Lexems::Name, "Unknown keyword should return Name");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_eof() {
+        let mut lexer = setup_lexer("");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::EOF, "Should set EOF for empty input");
+        assert_eq!(lexer.current_name, "", "Name should be empty for EOF");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_newline() {
+        let mut lexer = setup_lexer("\n");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::NewLine, "Should recognize newline");
+        assert_eq!(lexer.current_name, "", "Name should be empty for newline");
+        assert_eq!(lexer.line, 2, "Line should increment to 2");
+        assert_eq!(lexer.col, 1, "Column should reset to 1");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_whitespace() {
+        let mut lexer = setup_lexer("   a");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Name, "Should parse 'a' after whitespace");
+        assert_eq!(lexer.current_name, "a", "Name should be 'a'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_composite_not() {
+        let mut lexer = setup_lexer(".not.");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Not, "Should recognize '.not.'");
+        assert_eq!(lexer.current_name, ".not.", "Name should be '.not.'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_invalid_composite() {
+        let mut lexer = setup_lexer(".invalid.");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Error, "Should mark invalid composite as Error");
+        assert_eq!(lexer.current_name, "Invalid operator '.invalid.'", "Name should reflect error");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_identifier_keyword() {
+        let mut lexer = setup_lexer("if");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::If, "Should recognize 'if' as keyword");
+        assert_eq!(lexer.current_name, "if", "Name should be 'if'");
+        assert_eq!(lexer.name_table.entries().len(), 0, "Keyword should not be added to name table");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_identifier_name() {
+        let mut lexer = setup_lexer("xyz");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Name, "Should recognize 'xyz' as Name");
+        assert_eq!(lexer.current_name, "xyz", "Name should be 'xyz'");
+        assert_eq!(lexer.name_table.entries().len(), 1, "Name should be added to name table");
+        assert_eq!(lexer.name_table.entries()[0].name, "xyz");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_number() {
+        let mut lexer = setup_lexer("123");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Number, "Should recognize '123' as Number");
+        assert_eq!(lexer.current_name, "123", "Name should be '123'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_operators() {
+        let operators = [
+            ("+", Lexems::Plus, "+"),
+            ("-", Lexems::Minus, "-"),
+            ("*", Lexems::Mul, "*"),
+            ("/", Lexems::Div, "/"),
+            (";", Lexems::Semi, ";"),
+            ("=", Lexems::Equal, "="),
+            ("(", Lexems::LParen, "("),
+            (")", Lexems::RParen, ")"),
+            (",", Lexems::Comma, ","),
+        ];
+        for (input, expected_lexem, expected_name) in operators {
+            let mut lexer = setup_lexer(input);
+            lexer.advance();
+            assert_eq!(lexer.current_lexem, expected_lexem, "Should recognize '{}'", input);
+            assert_eq!(lexer.current_name, expected_name, "Name should be '{}'", expected_name);
+        }
+    }
+
+    #[test]
+    fn test_parse_next_lexem_colon() {
+        let mut lexer = setup_lexer(":");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Colon, "Should recognize ':'");
+        assert_eq!(lexer.current_name, ":", "Name should be ':'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_assign() {
+        let mut lexer = setup_lexer(":=");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Assign, "Should recognize ':='");
+        assert_eq!(lexer.current_name, ":=", "Name should be ':='");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_less() {
+        let mut lexer = setup_lexer("<");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Less, "Should recognize '<'");
+        assert_eq!(lexer.current_name, "<", "Name should be '<'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_less_or_equal() {
+        let mut lexer = setup_lexer("<=");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::LessOrEqual, "Should recognize '<='");
+        assert_eq!(lexer.current_name, "<=", "Name should be '<='");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_greater() {
+        let mut lexer = setup_lexer(">");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Greater, "Should recognize '>'");
+        assert_eq!(lexer.current_name, ">", "Name should be '>'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_greater_or_equal() {
+        let mut lexer = setup_lexer(">=");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::GreaterOrEqual, "Should recognize '>='");
+        assert_eq!(lexer.current_name, ">=", "Name should be '>='");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_not_equal() {
+        let mut lexer = setup_lexer("!=");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::NotEqual, "Should recognize '!='");
+        assert_eq!(lexer.current_name, "!=", "Name should be '!='");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_invalid_not_equal() {
+        let mut lexer = setup_lexer("!");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Error, "Should mark '!' as Error");
+        assert_eq!(lexer.current_name, "!", "Name should be '!'");
+    }
+
+    #[test]
+    fn test_parse_next_lexem_unknown_char() {
+        let mut lexer = setup_lexer("@");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Error, "Should mark '@' as Error");
+        assert_eq!(lexer.current_name, "@", "Name should be '@'");
+    }
+
+    #[test]
+    fn test_consume_simple() {
+        let mut lexer = setup_lexer("+");
+        lexer.consume_simple(Lexems::Plus, '+');
+        assert_eq!(lexer.current_lexem, Lexems::Plus, "Should set lexem to Plus");
+        assert_eq!(lexer.current_name, "+", "Name should be '+'");
+        assert_eq!(lexer.reader.current_char(), None, "Reader should advance to next char");
+    }
+
+    #[test]
+    fn test_parse_identifier_keyword() {
+        let mut lexer = setup_lexer("while");
+        lexer.parse_identifier();
+        assert_eq!(lexer.current_lexem, Lexems::While, "Should recognize 'while' as keyword");
+        assert_eq!(lexer.current_name, "while", "Name should be 'while'");
+        assert_eq!(lexer.name_table.entries().len(), 0, "Keyword should not be added to name table");
+    }
+
+    #[test]
+    fn test_parse_identifier_name_new() {
+        let mut lexer = setup_lexer("abc");
+        lexer.parse_identifier();
+        assert_eq!(lexer.current_lexem, Lexems::Name, "Should recognize 'abc' as Name");
+        assert_eq!(lexer.current_name, "abc", "Name should be 'abc'");
+        assert_eq!(lexer.name_table.entries().len(), 1, "Name should be added to name table");
+        assert_eq!(lexer.name_table.entries()[0].name, "abc", "Name table should contain 'abc'");
+    }
+
+    #[test]
+    fn test_parse_identifier_name_existing() {
+        let mut lexer = setup_lexer("abc");
+        let _ = lexer.name_table.add("abc".to_string(), Category::Var, DataType::None);
+        lexer.parse_identifier();
+        assert_eq!(lexer.current_lexem, Lexems::Name, "Should recognize 'abc' as Name");
+        assert_eq!(lexer.current_name, "abc", "Name should be 'abc'");
+        assert_eq!(lexer.name_table.entries().len(), 1, "Name table should not add duplicate");
+    }
+
+    #[test]
+    fn test_parse_number() {
+        let mut lexer = setup_lexer("456");
+        lexer.parse_number();
+        assert_eq!(lexer.current_lexem, Lexems::Number, "Should recognize '456' as Number");
+        assert_eq!(lexer.current_name, "456", "Name should be '456'");
+    }
+
+    #[test]
+    fn test_current_lexem() {
+        let mut lexer = setup_lexer("");
+        lexer.current_lexem = Lexems::Print;
+        assert_eq!(lexer.current_lexem(), Lexems::Print, "Should return current lexem");
+    }
+
+    #[test]
+    fn test_current_name() {
+        let mut lexer = setup_lexer("");
+        lexer.current_name = "test".to_string();
+        assert_eq!(lexer.current_name(), "test", "Should return current name");
+    }
+
+    #[test]
+    fn test_advance() {
+        let mut lexer = setup_lexer("int");
+        lexer.advance();
+        assert_eq!(lexer.current_lexem, Lexems::Int, "Should parse 'int' after advance");
+        assert_eq!(lexer.current_name, "int", "Name should be 'int'");
+        assert_eq!(lexer.reader.current_char(), None, "Reader should be at EOF after parsing 'int'");
     }
 }

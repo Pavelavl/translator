@@ -1,5 +1,5 @@
 use eframe::egui::{self};
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 mod compiler;
 mod code_generator;
@@ -7,9 +7,10 @@ mod lexical_analyzer;
 mod models;
 mod name_table;
 mod reader;
+mod writer;
 mod syntax_analyzer;
 
-use crate::{code_generator::CodeGenerator, compiler::Compiler, lexical_analyzer::LexicalAnalyzer, reader::Reader, syntax_analyzer::SyntaxAnalyzer};
+use crate::{code_generator::CodeGenerator, compiler::Compiler, lexical_analyzer::LexicalAnalyzer, reader::Reader, syntax_analyzer::SyntaxAnalyzer, writer::Writer};
 
 struct TranslatorApp {
     input_path: Option<PathBuf>,
@@ -39,32 +40,37 @@ impl eframe::App for TranslatorApp {
                     if ui.button("Open").clicked() {
                         if let Some(path) = rfd::FileDialog::new().pick_file() {
                             self.input_path = Some(path.clone());
-                            match Reader::read_to_string(path.to_str().unwrap()) {
-                                Ok(content) => {
-                                    self.input_text = content;
-                                    self.log_text
-                                        .push_str(&format!("Opened file: {:?}\n", path));
+                            if let Some(path_str) = path.to_str() {
+                                match Reader::read_to_string(path_str) {
+                                    Ok(content) => {
+                                        self.input_text = content;
+                                        self.log_text.push_str(&format!("Opened file: {:?}\n", path));
+                                    }
+                                    Err(e) => {
+                                        self.log_text.push_str(&format!("Error opening file: {e}\n"));
+                                    }
                                 }
-                                Err(e) => {
-                                    self.log_text
-                                        .push_str(&format!("Error opening file: {e}\n"));
-                                }
+                            } else {
+                                self.log_text.push_str("Error: Invalid file path encoding\n");
                             }
+                            ui.close();
                         }
-                        ui.close();
                     }
                     if ui.button("Save").clicked() {
+                        let w = Writer::new();
                         if let Some(path) = rfd::FileDialog::new().save_file() {
                             self.output_path = Some(path.clone());
-                            if let Err(e) =
-                                Reader::write_to_file(path.to_str().unwrap(), &self.output_text)
-                            {
-                                self.log_text.push_str(&format!("Error saving: {e}\n"));
+                            if let Some(path_str) = path.to_str() {
+                                if let Err(e) = w.write_to_file(path_str, &self.output_text) {
+                                    self.log_text.push_str(&format!("Error saving: {e}\n"));
+                                } else {
+                                    self.log_text.push_str("Output saved successfully.\n");
+                                }
                             } else {
-                                self.log_text.push_str("Output saved successfully.\n");
+                                self.log_text.push_str("Error: Invalid file path encoding\n");
                             }
+                            ui.close();
                         }
-                        ui.close();
                     }
                 });
 
@@ -75,30 +81,33 @@ impl eframe::App for TranslatorApp {
                         self.log_text.push_str("No input text to compile.\n");
                         return;
                     }
-                
+
                     self.log_text.push_str("Starting compilation...\n");
                     CodeGenerator::clear();
-                
-                    if let Err(e) = Reader::init_with_string(&self.input_text) {
+
+                    let mut r = Reader::new();
+                    if let Err(e) = r.init_with_string(&self.input_text) {
                         self.log_text.push_str(&format!("Reader init error: {e}\n"));
-                        Reader::close();
+                        r.close();
                         return;
                     }
-                
-                    let mut lexer = LexicalAnalyzer::new();
+
+                    let mut lexer = LexicalAnalyzer::new(r);
                     lexer.advance(); // Advance to first token after Reader initialization
                     let analyzer = SyntaxAnalyzer::new(lexer);
                     let mut compiler = Compiler::new(analyzer);
-                
+
                     match compiler.compile() {
                         Ok(asm_code) => {
+                            let w = Writer::new();
                             self.output_text = asm_code;
                             self.log_text.push_str("Compilation finished successfully.\n");
-                            if let Err(e) = fs::write("test.asm", &self.output_text) {
-                                self.log_text.push_str(&format!("Failed to write test.asm: {e}\n"));
+                            let output_file = self.output_path.as_ref().map_or("test.asm", |p| p.to_str().unwrap_or("test.asm"));
+                            if let Err(e) = w.write_to_file(output_file, &self.output_text) {
+                                self.log_text.push_str(&format!("Failed to write {}: {e}\n", output_file));
                             } else {
-                                self.log_text.push_str("Generated test.asm successfully.\n");
-                                match std::process::Command::new("tasm").arg("test.asm").output() {
+                                self.log_text.push_str(&format!("Generated {} successfully.\n", output_file));
+                                match std::process::Command::new("tasm").arg(output_file).output() {
                                     Ok(output) => {
                                         self.log_text.push_str(&format!(
                                             "TASM Output:\n{}",
@@ -130,7 +139,6 @@ impl eframe::App for TranslatorApp {
                             }
                         }
                     }
-                    Reader::close();
                 }
             });
         });
@@ -152,7 +160,7 @@ impl eframe::App for TranslatorApp {
                     ui.heading("Output");
                     ui.add_sized(
                         [half_width, ui.available_height()],
-                        egui::TextEdit::multiline(&mut self.output_text),
+                        egui::TextEdit::multiline(&mut self.output_text).interactive(true),
                     );
                 });
             });
@@ -177,7 +185,6 @@ impl eframe::App for TranslatorApp {
                             [ui.available_width(), ui.available_height()],
                             egui::TextEdit::multiline(&mut self.log_text)
                                 .desired_rows(6)
-                                .lock_focus(true)
                                 .interactive(true)
                                 .frame(true),
                         );

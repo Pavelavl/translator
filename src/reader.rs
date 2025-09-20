@@ -1,15 +1,8 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, BufReader, Read, Write};
-use std::sync::{Mutex, OnceLock};
-
-static READER: OnceLock<Mutex<ReaderInner>> = OnceLock::new();
-
-fn global_reader() -> &'static Mutex<ReaderInner> {
-    READER.get_or_init(|| Mutex::new(ReaderInner::default()))
-}
+use std::fs::File;
+use std::io::{self, BufReader, Read};
 
 #[derive(Default)]
-struct ReaderInner {
+pub struct ReaderInner {
     file_path: Option<String>,
     reader: Option<BufReader<File>>,
     current_char: Option<char>,
@@ -34,12 +27,22 @@ impl ReaderInner {
         self.string_content = Some(chars);
         self.string_pos = 0;
         self.line = 1;
-        self.col = 1; // Start at col 1 for the first character
+        self.col = 1;
         self.eof = false;
         self.reader = None;
         self.file_path = None;
 
-        self.read_next_char().map_err(|e| e.to_string())?;
+        // Set current_char to the first character and adjust column
+        if let Some(&ch) = self.string_content.as_ref().and_then(|chars| chars.get(0)) {
+            self.current_char = Some(ch);
+            match ch {
+                '\t' => self.col += 4, // Tab increments column by 4
+                _ => self.col += 1,    // Other characters increment column by 1
+            }
+        } else {
+            self.current_char = None;
+            self.eof = true;
+        }
         Ok(())
     }
 
@@ -51,24 +54,27 @@ impl ReaderInner {
                 return Ok(());
             }
 
-            let ch = chars[self.string_pos];
             self.string_pos += 1;
+            if self.string_pos >= chars.len() {
+                self.current_char = None;
+                self.eof = true;
+                return Ok(());
+            }
 
+            let ch = chars[self.string_pos];
             match ch {
                 '\r' => {
-                    // Skip \r and try next character
-                    return self.read_next_char();
+                    self.col += 1;
+                    self.current_char = Some('\r');
                 }
                 '\n' => {
                     self.line += 1;
                     self.col = 1;
-                    self.current_char = None; // Don't treat newline as a character
-                    return self.read_next_char(); // Advance to next non-whitespace
+                    self.current_char = Some('\n');
                 }
                 '\t' => {
-                    self.col += 4; // Treat tab as 4 spaces
-                    self.current_char = None;
-                    return self.read_next_char(); // Skip tabs
+                    self.col += 4;
+                    self.current_char = Some('\t');
                 }
                 _ => {
                     self.col += 1;
@@ -86,18 +92,17 @@ impl ReaderInner {
                     let ch = buf[0] as char;
                     match ch {
                         '\r' => {
-                            return self.read_next_char();
+                            self.col += 1;
+                            self.current_char = Some('\r');
                         }
                         '\n' => {
                             self.line += 1;
                             self.col = 1;
-                            self.current_char = None;
-                            return self.read_next_char();
+                            self.current_char = Some('\n');
                         }
                         '\t' => {
                             self.col += 4;
-                            self.current_char = None;
-                            return self.read_next_char();
+                            self.current_char = Some('\t');
                         }
                         _ => {
                             self.col += 1;
@@ -123,53 +128,141 @@ impl ReaderInner {
         self.line = 1;
         self.col = 1;
     }
-
-    fn write_all(&self, path: &str, content: &str) -> io::Result<()> {
-        let mut f = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
-        f.write_all(content.as_bytes())
-    }
 }
 
-pub struct Reader;
+pub struct Reader {
+    inner: ReaderInner,
+}
 
 impl Reader {
-    pub fn init_with_string(content: &str) -> Result<(), String> {
-        global_reader().lock().unwrap().init_with_string(content)
+    pub fn new() -> Self {
+        Reader {
+            inner: ReaderInner::default(),
+        }
     }
 
-    pub fn read_next_char() -> io::Result<()> {
-        global_reader().lock().unwrap().read_next_char()
+    pub fn init_with_string(&mut self, content: &str) -> Result<(), String> {
+        self.inner.init_with_string(content)
     }
 
-    pub fn close() {
-        global_reader().lock().unwrap().close()
+    pub fn read_next_char(&mut self) -> io::Result<()> {
+        self.inner.read_next_char()
     }
 
-    pub fn current_char() -> Option<char> {
-        global_reader().lock().unwrap().current_char
+    pub fn close(&mut self) {
+        self.inner.close()
     }
 
-    pub fn line() -> usize {
-        global_reader().lock().unwrap().line
+    pub fn current_char(&self) -> Option<char> {
+        self.inner.current_char
     }
 
-    pub fn col() -> usize {
-        global_reader().lock().unwrap().col
+    pub fn line(&self) -> usize {
+        self.inner.line
     }
 
-    pub fn is_eof() -> bool {
-        global_reader().lock().unwrap().eof
+    pub fn col(&self) -> usize {
+        self.inner.col
+    }
+
+    pub fn is_eof(&self) -> bool {
+        self.inner.eof
     }
 
     pub fn read_to_string(path: &str) -> io::Result<String> {
         std::fs::read_to_string(path)
     }
+}
 
-    pub fn write_to_file(path: &str, content: &str) -> io::Result<()> {
-        global_reader().lock().unwrap().write_all(path, content)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_init_with_empty_string() {
+        let mut reader = Reader::new();
+        let result = reader.init_with_string("");
+        assert!(result.is_ok());
+        assert_eq!(reader.current_char(), None);
+        assert!(reader.is_eof());
+        assert_eq!(reader.line(), 1);
+        assert_eq!(reader.col(), 1);
+    }
+
+    #[test]
+    fn test_init_with_single_char() {
+        let mut reader = Reader::new();
+        let result = reader.init_with_string("a");
+        assert!(result.is_ok());
+        assert_eq!(reader.current_char(), Some('a'));
+        assert!(!reader.is_eof());
+        assert_eq!(reader.line(), 1);
+        assert_eq!(reader.col(), 2);
+    }
+
+    #[test]
+    fn test_read_next_char() {
+        let mut reader = Reader::new();
+        reader.init_with_string("ab").unwrap();
+        assert_eq!(reader.current_char(), Some('a'));
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('b'));
+        assert_eq!(reader.col(), 3);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), None);
+        assert!(reader.is_eof());
+    }
+
+    #[test]
+    fn test_newline_handling() {
+        let mut reader = Reader::new();
+        reader.init_with_string("a\nb").unwrap();
+        assert_eq!(reader.current_char(), Some('a'));
+        assert_eq!(reader.line(), 1);
+        assert_eq!(reader.col(), 2);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('\n'));
+        assert_eq!(reader.line(), 2);
+        assert_eq!(reader.col(), 1);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('b'));
+        assert_eq!(reader.line(), 2);
+        assert_eq!(reader.col(), 2);
+    }
+
+    #[test]
+    fn test_tab_handling() {
+        let mut reader = Reader::new();
+        reader.init_with_string("\ta").unwrap();
+        assert_eq!(reader.current_char(), Some('\t'));
+        assert_eq!(reader.col(), 5);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('a'));
+        assert_eq!(reader.col(), 6);
+    }
+
+    #[test]
+    fn test_carriage_return_handling() {
+        let mut reader = Reader::new();
+        reader.init_with_string("a\rb").unwrap();
+        assert_eq!(reader.current_char(), Some('a'));
+        assert_eq!(reader.col(), 2);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('\r'));
+        assert_eq!(reader.col(), 3);
+        reader.read_next_char().unwrap();
+        assert_eq!(reader.current_char(), Some('b'));
+        assert_eq!(reader.col(), 4);
+    }
+
+    #[test]
+    fn test_close() {
+        let mut reader = Reader::new();
+        reader.init_with_string("abc").unwrap();
+        reader.close();
+        assert_eq!(reader.current_char(), None);
+        assert!(reader.is_eof());
+        assert_eq!(reader.line(), 1);
+        assert_eq!(reader.col(), 1);
     }
 }
