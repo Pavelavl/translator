@@ -10,7 +10,7 @@ mod reader;
 mod writer;
 mod syntax_analyzer;
 
-use crate::{code_generator::CodeGenerator, compiler::Compiler, lexical_analyzer::LexicalAnalyzer, reader::Reader, syntax_analyzer::SyntaxAnalyzer, writer::Writer};
+use crate::{compiler::Compiler, reader::Reader, writer::Writer};
 
 struct TranslatorApp {
     input_path: Option<PathBuf>,
@@ -83,19 +83,7 @@ impl eframe::App for TranslatorApp {
                     }
 
                     self.log_text.push_str("Starting compilation...\n");
-                    CodeGenerator::clear();
-
-                    let mut r = Reader::new();
-                    if let Err(e) = r.init_with_string(&self.input_text) {
-                        self.log_text.push_str(&format!("Reader init error: {e}\n"));
-                        r.close();
-                        return;
-                    }
-
-                    let mut lexer = LexicalAnalyzer::new(r);
-                    lexer.advance(); // Advance to first token after Reader initialization
-                    let analyzer = SyntaxAnalyzer::new(lexer);
-                    let mut compiler = Compiler::new(analyzer);
+                    let mut compiler = Compiler::new(&self.input_text);
 
                     match compiler.compile() {
                         Ok(asm_code) => {
