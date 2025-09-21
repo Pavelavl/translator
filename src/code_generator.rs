@@ -264,8 +264,8 @@ impl CodeGenerator {
             if ident.category == Category::Var {
                 println!("[CodeGenerator] Declaring variable: {} dw 0", ident.name);
                 self.add_instruction(&format!("{} dw 0", ident.name));
-            } else if ident.category == Category::Const && ident.value.is_some() {
-                let value = ident.value.unwrap();
+            } else if ident.category == Category::Const {
+                let value = ident.value.unwrap_or(0); // Default to 0 if no value
                 println!("[CodeGenerator] Declaring constant: {} dw {}", ident.name, value);
                 self.add_instruction(&format!("{} dw {}", ident.name, value));
             }
